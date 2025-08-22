@@ -1,0 +1,146 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NOAA Radar Reflectivity</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body { margin:0; padding:0; }
+    #map { width: 100vw; height: 100vh; }
+    .icao-marker {
+      background-color: rgba(255, 255, 255, 0.85);
+      color: #000;
+      padding: 5px 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      font-size: 12px;
+      font-weight: bold;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .icao-marker:hover {
+      background-color: #ffd;
+      cursor: pointer;
+    }
+    #radarImage {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      max-width: 300px;
+      border: 1px solid white;
+    }
+    #parseBtn {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <img id="radarImage" />
+  <button id="parseBtn">Parse NEXRAD (check console)</button>
+
+  <!-- Load Leaflet -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Load and use WASM -->
+  <script type="module">
+    import Module from "{% static 'radar/wasm/module.js' %}";
+
+    let instance = null;
+
+    window.parseRadarFile = async function parseRadarFile(icao) {
+      console.log(`Parsing radar for site ${icao}`);
+
+      const corsProxy = "https://corsproxy.io/?";
+
+      // Construct S3 URL (modify the date/time logic as needed)
+      const date = "2022/03/22"; // or dynamically based on the app state
+      const filename = `${icao}${date.replace(/\//g, '')}_120125_V06`; // Example: KHGX20220322_120125_V06
+      //const url = `https://noaa-nexrad-level2.s3.amazonaws.com/${date}/${icao}/${filename}`;
+
+      const url = "https://noaa-nexrad-level2.s3.amazonaws.com/2022/03/22/KHGX/KHGX20220322_120125_V06";
+
+
+      const raw = await fetch(corsProxy + encodeURIComponent(url))
+        .then(r => r.arrayBuffer())
+        .then(buf => new Uint8Array(buf));
+
+      const ptr = instance._malloc(raw.length);
+      instance.HEAPU8.set(raw, ptr);
+
+      instance._parse_nexrad(ptr, raw.length);
+
+      const size = instance._get_png_size();
+      const ptr_image = instance._get_png_data();
+
+      const lat1 = instance._get_latitude_topleft();
+      const lon1 = instance._get_longitude_topleft();
+      const lat2 = instance._get_latitude_bottomright();
+      const lon2 = instance._get_longitude_bottomright();
+
+      const bounds = [[lat2, lon1], [lat1, lon2]]; // SW and NE corners
+
+      const bytes = new Uint8Array(instance.HEAPU8.buffer, ptr_image, size);
+      const blob = new Blob([bytes], { type: "image/png" });
+      const url_image = URL.createObjectURL(blob);
+
+      // Add Leaflet image overlay
+      if (window.currentRadarOverlay) {
+        map.removeLayer(window.currentRadarOverlay);
+      }
+
+      const radarImage = L.imageOverlay(url_image, bounds, { opacity: 0.65 });
+      radarImage.addTo(map);
+      window.currentRadarOverlay = radarImage;
+
+      instance._free(ptr);
+    }
+
+
+    async function main() {
+      instance = await Module();
+      console.log("WASM loaded.");
+      document.getElementById('parseBtn').onclick = parseRadarFile;
+    }
+
+    main();
+  </script>
+
+  <!-- Leaflet map logic -->
+  <script>
+    const map = L.map('map').setView([35.3, -97.3], 8);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(map);
+
+    fetch("{% static 'radar/nexrad_sites.json' %}")
+      .then(response => response.json())
+      .then(data => {
+        data.nexrad_sites.forEach(site => {
+          const marker = L.marker([site.latitude, site.longitude], {
+            icon: L.divIcon({
+              className: 'icao-marker',
+              html: site.icao,
+              iconSize: [40, 20],
+              iconAnchor: [20, 10]
+            })
+          }).addTo(map);
+
+          marker.bindPopup(`<strong>${site.city}</strong><br>ICAO: ${site.icao}`);
+
+          marker.on('click', () => {
+            parseRadarFile(site.icao);
+          });
+        });
+      });
+  </script>
+</body>
+</html>

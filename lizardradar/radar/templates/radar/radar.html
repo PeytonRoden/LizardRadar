@@ -1,0 +1,451 @@
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NOAA Radar Reflectivity</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/proj4@2.8.0/dist/proj4.js"></script>
+  <script src="https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
+
+  <script>
+
+    var current_icao = null;
+
+  </script>
+
+  <style>
+      /* Reset for Leaflet markers */
+      .leaflet-div-icon,
+      .leaflet-marker-icon,
+      .leaflet-marker-shadow {
+          max-width: none !important;
+          height: auto !important;
+      }
+      .icao-marker {
+          display: inline-block;
+          width: auto;
+          height: auto;
+      }
+  </style>
+
+  <style>
+    body { margin:0; padding:0; }
+
+    /* Adjust map height to avoid overlapping banners */
+    #map {
+      position: absolute;
+      top: 40px;      /* below top banner */
+      bottom: 40px;   /* above bottom banner */
+      left: 0;
+      right: 0;
+    }
+    .icao-marker {
+      background-color: rgba(255, 255, 255, 0.85);
+      color: #000;
+      padding: 5px 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      font-size: 12px;
+      font-weight: bold;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .icao-marker:hover {
+      background-color: #ffdd00;
+      cursor: pointer;
+    }
+    #radarImage {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      max-width: 2000px;
+      border: 1px solid white;
+    }
+    #parseBtn {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      padding: 10px;
+    }
+    .radar-overlay-crisp {
+    image-rendering: -moz-crisp-edges;
+    image-rendering: -webkit-crisp-edges;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges; 
+    }
+
+    .banner {
+      position: fixed;
+      width: 100vw;
+      height: 40px;
+      background-color: rgb(36, 36, 36);
+      color: white;
+      font-family: Arial, sans-serif;
+      line-height: 40px;
+      padding: 0 15px;  /* fix: no space inside '0 15px' */
+      z-index: 1000;
+      user-select: none;
+      box-sizing: border-box;
+    }
+
+    #topBanner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;           /* spacing between items */
+      padding: 0 15px;     /* fix: padding units */
+      box-sizing: border-box;
+    }
+
+    .banner-side {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 1;
+    }
+    .banner-side-bottom {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      flex-shrink: 1;
+    }
+
+
+    /* Make center take up remaining space */
+    #centerInfo {
+      flex-grow: 1;        /* expand center */
+      text-align: center;
+      /* allow center text to break if needed, or keep nowrap for ellipsis */
+      white-space: nowrap;
+    }
+
+
+    #bottomBanner {
+      bottom: 0;
+      left: 0;
+      border-top: 1px solid #252323;
+    }
+
+    .dropup {
+      position: relative;
+      display: inline-block;
+    }
+
+    .dropbtn {
+      background-color: #3498db;
+      color: white;
+      padding: 10px 14px;
+      font-size: 14px;
+      border: none;
+      cursor: pointer;
+    }
+
+    .dropup-content {
+      display: none;
+      position: absolute;
+      bottom: 100%; /* makes it open upward */
+      left: 0;
+      background-color: #f1f1f1;
+      min-width: 160px;
+      box-shadow: 0px 8px 16px rgba(0,0,0,0.2);
+      z-index: 1;
+    }
+
+    .dropup-content a {
+      color: black;
+      padding: 10px 14px;
+      text-decoration: none;
+      display: block;
+    }
+
+    .dropup-content a:hover {
+      background-color: #ddd;
+    }
+
+    /* Hover shows the menu */
+    .dropup:hover .dropup-content {
+      display: block;
+    }
+
+    /* Button hover effect */
+    .dropup:hover .dropbtn {
+      background-color: #2980b9;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="topBanner" class="banner">
+    <div id="leftInfo" class="banner-side"></div>
+    <div id="centerInfo" class="banner-side"></div>
+    <div id="rightInfo" class="banner-side"></div>
+  </div>
+  
+  <div id="bottomBanner" class="banner">
+    <div id="leftInfoDown" class="banner-side-bottom"></div>
+    <div id="centerInfoDown" class="banner-side-bottom"></div>
+    <div id="rightInfoDown" class="banner-side-bototm"></div>
+  </div>
+
+  
+
+  <div id="map"></div>
+  <img id="radarImage" />
+  <button id="parseBtn">Parse NEXRAD (check console)</button>
+
+  <!-- Load Leaflet -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    
+
+  <!-- Load and use WASM -->
+  <script type="module">
+    import Module from "{% static 'radar/wasm/module.js' %}";
+    let instance = null;
+
+    function parseNexradUrlDateLocal(url) {
+      const parts = url.split('/');
+      const filename = parts[parts.length - 1]; // e.g. "KHGX20220322_120125_V06"
+
+      const match = filename.match(/[A-Z]{4}(\d{8})_(\d{6})/);
+
+      if (!match) {
+        return null;
+      }
+
+      const datePart = match[1];
+      const timePart = match[2];
+
+      const year = parseInt(datePart.substring(0, 4), 10);
+      const month = parseInt(datePart.substring(4, 6), 10) - 1;
+      const day = parseInt(datePart.substring(6, 8), 10);
+
+      const hours = parseInt(timePart.substring(0, 2), 10);
+      const minutes = parseInt(timePart.substring(2, 4), 10);
+      const seconds = parseInt(timePart.substring(4, 6), 10);
+
+      // Create Date object in UTC
+      const utcDate = new Date(Date.UTC(year, month, day, hours, minutes, seconds));
+
+      // Return the same Date object; JS Date methods like toString() show local time
+      return utcDate;
+    }
+
+
+    window.parseRadarFile = async function parseRadarFile(icao) {
+
+      // if (current_icao == null){
+      //   return null;
+      // }
+
+      console.log("hi im here");
+      const response = await fetch(`/radar/latest-scan/${icao}`);
+      const data = await response.json();
+      if (data.url) {
+        const radarFileUrl = data.url;
+        // Proceed with radarFileUrl
+      } else {
+        console.error("Error:", data.error);
+      }
+
+      console.log(`Parsing radar for site ${icao}`);
+
+      //var corsProxy = "https://corsproxy.io/?";
+      var corsProxy = "http://localhost:8082/";
+
+      //const url = "https://noaa-nexrad-level2.s3.amazonaws.com/2022/03/22/KHGX/KHGX20220322_120125_V06";
+      let url =      data.url;
+      console.log("Radar URL:", data.url);
+
+      //get date/time from url and dipslay: 
+      const localDate = parseNexradUrlDateLocal(url);
+      document.getElementById('rightInfo').innerHTML = `<strong>${localDate.toLocaleString()}</strong> ` ;
+
+
+      console.log("proxy url: " , corsProxy + encodeURIComponent(url))
+      console.log("proxy url: " , corsProxy + url)
+
+      // const raw = await fetch(corsProxy + encodeURIComponent(url))
+      //   .then(r => r.arrayBuffer())
+      //   .then(buf => new Uint8Array(buf));
+      
+      const raw = await fetch(corsProxy + url)
+        .then(r => r.arrayBuffer())
+        .then(buf => new Uint8Array(buf));
+
+      const ptr = instance._malloc(raw.length);
+      instance.HEAPU8.set(raw, ptr);
+
+      instance._parse_nexrad(ptr, raw.length);
+
+      const size = instance._get_png_size();
+      const ptr_image = instance._get_png_data();
+
+      const lat1 = instance._get_latitude_topleft();
+      const lon1 = instance._get_longitude_topleft();
+      const lat2 = instance._get_latitude_bottomright();
+      const lon2 = instance._get_longitude_bottomright();
+
+      console.log("lat1: " , lat1);
+      console.log("lon1: " , lon1);
+      console.log("lat2: " , lat2);
+      console.log("lon2 " , lon2);
+
+      const bounds = [[lat2, lon1], [lat1, lon2]]; // SW and NE corners
+
+      const bytes = new Uint8Array(instance.HEAPU8.buffer, ptr_image, size);
+      const blob = new Blob([bytes], { type: "image/png" });
+      const url_image = URL.createObjectURL(blob);
+
+      // Add Leaflet image overlay
+      if (window.currentRadarOverlay) {
+        map.removeLayer(window.currentRadarOverlay);
+      }
+      
+      const radarImage = L.imageOverlay(url_image, bounds, {
+          opacity: 0.5,
+          interactive: false,
+          noWrap: true,
+          pane: 'overlayPane',
+          preferCanvas: true,
+          className: 'radar-overlay-crisp'  // Add custom class
+      });
+
+// Add CSS to disable image smoothing
+
+      radarImage.addTo(map);
+      window.currentRadarOverlay = radarImage;
+
+      instance._free(ptr);
+    }
+
+
+    const radarMoments = ["REF", "VEL", "SW ", "ZDR", "PHI", "RHO"];
+    
+    // Create dropup container
+    const dropup = document.createElement("div");
+    dropup.className = "dropup";
+    
+    // Create button
+    const button = document.createElement("button");
+    button.className = "dropbtn";
+    button.textContent = "Select Radar Moment";
+    
+    // Create dropup content container
+    const content = document.createElement("div");
+    content.className = "dropup-content";
+    
+    // Populate menu from array
+    radarMoments.forEach(moment => {
+      const link = document.createElement("a");
+      link.href = "#";
+      link.textContent = moment;
+      link.addEventListener("click", e => {
+        e.preventDefault();
+        button.textContent = `Selected: ${moment}`;
+
+        console.log("setting moment to : ", moment);
+
+
+        const lengthBytes = instance.lengthBytesUTF8(moment) + 1;
+        const stringOnHeap = instance._malloc(lengthBytes);
+
+        // Copy JS string into heap as UTF8 C-string
+        instance.stringToUTF8(moment, stringOnHeap, lengthBytes);
+
+        //call function to change moment
+        instance._set_selected_radar_moment(stringOnHeap);
+
+        // Remember to free the malloced memory if no longer needed
+        instance._free(stringOnHeap);
+        
+        console.log("current icao: " ,current_icao)
+        parseRadarFile(current_icao)
+
+      });
+      content.appendChild(link);
+    });
+    
+    // Put it all together
+    dropup.appendChild(button);
+    dropup.appendChild(content);
+    document.getElementById("leftInfoDown").appendChild(dropup);
+
+
+
+
+    async function main() {
+      instance = await Module();
+      console.log("WASM loaded.");
+      document.getElementById('parseBtn').onclick = parseRadarFile;
+    }
+
+    main();
+  </script>
+
+  <!-- Leaflet map logic -->
+  <script>
+
+    // const map = L.map('map').setView([35.3, -97.3], 8);
+    // L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    //   attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+    //   subdomains: 'abcd',
+    //   maxZoom: 19
+    // }).addTo(map);
+
+
+
+      // Initialize the map with EPSG:4326 CRS
+      const map = L.map('map', {
+          crs: L.CRS.EPSG4326,
+          center: [35.3, -80.3],
+          zoom: 2
+      });
+
+      // // Use WMS instead of tiles - this handles EPSG:4326 correctly
+      // L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
+      //     layers: 'OSM-WMS',
+      //     format: 'image/png',
+      //     transparent: true,
+      //     crs: L.CRS.EPSG4326,
+      //     attribution: 'OSM-WMS by terrestris'
+      // }).addTo(map);
+
+      L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
+        layers: 'TOPO-OSM-WMS',
+        format: 'image/png',
+        transparent: false,
+        crs: L.CRS.EPSG4326,
+        attribution: 'TOPO‑OSM‑WMS by terrestris'
+      }).addTo(map);
+
+
+    fetch("{% static 'radar/nexrad_sites.json' %}")
+      .then(response => response.json())
+      .then(data => {
+        data.nexrad_sites.forEach(site => {
+          const marker = L.marker([site.latitude, site.longitude], {
+            icon: L.divIcon({
+              className: 'icao-marker',
+              html: site.icao,
+              iconSize: [40, 20],
+              iconAnchor: [20, 10]
+            })
+          }).addTo(map);
+
+          marker.bindPopup(`<strong>${site.city}</strong><br>ICAO: ${site.icao}`);
+
+          marker.on('click', () => {
+            current_icao = site.icao;
+            console.log('current_icao: ',current_icao);
+            parseRadarFile(site.icao);
+
+            document.getElementById('leftInfo').innerHTML = `<strong>${site.city}</strong> | ICAO: ${site.icao}`;
+          });
+        });
+      });
+  </script>
+</body>
+</html>

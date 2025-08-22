@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Minimal WASM</title>
+</head>
+<body>
+    <h1>Minimal C++ WASM Example</h1>
+    <button id="parseBtn">Parse NEXRAD (check console)</button>
+
+    <img id="radarImage" />
+
+    <script type="module">
+        import Module from './module.js';
+
+        let instance = null;
+
+        async function parseRadarFile() {
+
+            console.log("hi");
+
+            const corsProxy = "https://corsproxy.io/?";
+            const url = "https://noaa-nexrad-level2.s3.amazonaws.com/2022/03/22/KHGX/KHGX20220322_120125_V06";
+
+            const raw = await fetch(corsProxy + encodeURIComponent(url))
+                .then(r => r.arrayBuffer())
+                .then(buf => new Uint8Array(buf));
+
+            console.log("Magic header:", raw.slice(0, 3));
+
+            const ptr = instance._malloc(raw.length);
+            instance.HEAPU8.set(raw, ptr);
+
+            instance._parse_nexrad(ptr, raw.length);
+
+            const size = instance._get_png_size();
+            const ptr_image = instance._get_png_data();
+            const bytes = new Uint8Array(instance.HEAPU8.buffer, ptr_image, size);
+
+            const blob = new Blob([bytes], { type: "image/png" });
+            const url_image = URL.createObjectURL(blob);
+            document.getElementById("radarImage").src = url_image;
+
+            instance._free(ptr);
+        }
+
+        async function main() {
+            console.log("hi");
+            instance = await Module();  // The runtime is ready here already
+            console.log(Object.keys(instance));
+
+            console.log("WASM loaded and initialized.");
+            document.getElementById('parseBtn').onclick = parseRadarFile;
+        }
+
+
+        main();
+    </script>
+</body>
+</html>
