@@ -14,6 +14,7 @@
   <script>
 
     var current_icao = null;
+    var tiltAngles = [-1];
 
   </script>
 
@@ -123,16 +124,19 @@
     }
 
 
-    #bottomBanner {
+    /* Ensure the bottom banner doesn't interfere */
+    #bottomBanner{
       bottom: 0;
       left: 0;
       border-top: 1px solid #252323;
+      z-index: 1000; /* Lower than dropup content */
+      overflow: visible; /* Allow content to overflow */
+      display: flex;
     }
+    
 
-    .dropup {
-      position: relative;
-      display: inline-block;
-    }
+
+    .dropup { position: relative; display: inline-block; }
 
     .dropbtn {
       background-color: #3498db;
@@ -141,31 +145,45 @@
       font-size: 14px;
       border: none;
       cursor: pointer;
+      border-radius: 4px; /* Add rounded corners */
     }
 
     .dropup-content {
       display: none;
       position: absolute;
-      bottom: 100%; /* makes it open upward */
+      bottom: 100%;       /* open upward */
       left: 0;
-      background-color: #f1f1f1;
+      margin: 0;          /* IMPORTANT: no gap, remove any margin here */
+      background: #f9f9f9;
       min-width: 160px;
-      box-shadow: 0px 8px 16px rgba(0,0,0,0.2);
-      z-index: 1;
+      box-shadow: 0 -8px 16px rgba(0,0,0,0.3);
+      z-index: 2000;
+      max-height: 240px;
+      overflow-y: auto;
     }
+    .dropup.open .dropup-content { display: block; }
 
     .dropup-content a {
       color: black;
       padding: 10px 14px;
       text-decoration: none;
       display: block;
+      white-space: nowrap;
     }
 
     .dropup-content a:hover {
       background-color: #ddd;
     }
 
-    /* Hover shows the menu */
+    .dropup-content a:first-child {
+      border-radius: 4px 4px 0 0; /* Round top corners */
+    }
+
+    .dropup-content a:last-child {
+      border-radius: 0 0 4px 4px; /* Round bottom corners */
+    }
+
+    /* Show the menu on hover - make sure this selector is specific enough */
     .dropup:hover .dropup-content {
       display: block;
     }
@@ -174,6 +192,9 @@
     .dropup:hover .dropbtn {
       background-color: #2980b9;
     }
+
+    
+
   </style>
 </head>
 <body>
@@ -187,7 +208,7 @@
   <div id="bottomBanner" class="banner">
     <div id="leftInfoDown" class="banner-side-bottom"></div>
     <div id="centerInfoDown" class="banner-side-bottom"></div>
-    <div id="rightInfoDown" class="banner-side-bototm"></div>
+    <div id="rightInfoDown" class="banner-side-bottom"></div>
   </div>
 
   
@@ -280,6 +301,18 @@
 
       instance._parse_nexrad(ptr, raw.length);
 
+      // get pointer and size
+      const ptr_tilt_angles = instance._get_tilt_angles();
+      const size_tilt_angles = instance._get_tilt_angles_size();
+
+      // Float32Array view into WASM memory
+      tiltAngles = new Float32Array(instance.HEAPF32.buffer, ptr_tilt_angles , size_tilt_angles );
+
+      // Now you can use it like a normal JS array
+      console.log("Tilt angles:", tiltAngles);
+
+      build_popUp_tilt_angles();
+
       const size = instance._get_png_size();
       const ptr_image = instance._get_png_data();
 
@@ -325,17 +358,17 @@
     const radarMoments = ["REF", "VEL", "SW ", "ZDR", "PHI", "RHO"];
     
     // Create dropup container
-    const dropup = document.createElement("div");
-    dropup.className = "dropup";
+    const dropup_moments = document.createElement("div");
+    dropup_moments.className = "dropup";
     
     // Create button
-    const button = document.createElement("button");
-    button.className = "dropbtn";
-    button.textContent = "Select Radar Moment";
+    const button_moments = document.createElement("button");
+    button_moments.className = "dropbtn";
+    button_moments.textContent = "Select Radar Moment";
     
     // Create dropup content container
-    const content = document.createElement("div");
-    content.className = "dropup-content";
+    const content_moments = document.createElement("div");
+    content_moments.className = "dropup-content";
     
     // Populate menu from array
     radarMoments.forEach(moment => {
@@ -344,7 +377,7 @@
       link.textContent = moment;
       link.addEventListener("click", e => {
         e.preventDefault();
-        button.textContent = `Selected: ${moment}`;
+        button_moments.textContent = `Selected: ${moment}`;
 
         console.log("setting moment to : ", moment);
 
@@ -365,13 +398,66 @@
         parseRadarFile(current_icao)
 
       });
-      content.appendChild(link);
+      content_moments.appendChild(link);
     });
     
     // Put it all together
-    dropup.appendChild(button);
-    dropup.appendChild(content);
-    document.getElementById("leftInfoDown").appendChild(dropup);
+    dropup_moments.appendChild(button_moments);
+    dropup_moments.appendChild(content_moments);
+    document.getElementById("leftInfoDown").appendChild(dropup_moments);
+
+
+    function build_popUp_tilt_angles() {
+        const container = document.getElementById("rightInfoDown");
+        container.innerHTML = ""; // clear old dropup if exists
+
+        // Check if tiltAngles has valid data
+        if (!tiltAngles || tiltAngles.length === 0) {
+            console.log("No tilt angles available");
+            return;
+        }
+
+        const dropup_angles = document.createElement("div");
+        dropup_angles.className = "dropup";
+
+        const button_angles = document.createElement("button");
+        button_angles.className = "dropbtn";
+        button_angles.textContent = "Select Tilt Angle";
+
+        const content_angles = document.createElement("div");
+        content_angles.className = "dropup-content";
+
+        // Filter and add valid tilt angles
+        let hasValidAngles = false;
+        tiltAngles.forEach((angle, idx) => {
+            if (angle >= 0) { // Changed from < 0 to >= 0 to include valid angles
+                hasValidAngles = true;
+                const link = document.createElement("a");
+                link.href = "#";
+                link.textContent = `${angle.toFixed(1)}°`;
+                link.addEventListener("click", e => {
+                    e.preventDefault();
+                    button_angles.textContent = `Selected: ${angle.toFixed(1)}°`;
+                    // const setTiltIndex = instance.cwrap("_set_tilt_angles_index", null, ["number"]);
+                    // setTiltIndex(idx);
+                    instance._set_tilt_angles_index(idx);
+                    parseRadarFile(current_icao);
+                    console.log("parsed new tilt angle")
+                });
+                content_angles.appendChild(link);
+            }
+        });
+
+        // Only add the dropup if we have valid angles
+        if (hasValidAngles) {
+            dropup_angles.appendChild(button_angles);
+            dropup_angles.appendChild(content_angles);
+            container.appendChild(dropup_angles);
+            console.log("Tilt angles menu created with", content_angles.children.length, "options");
+        } else {
+            console.log("No valid tilt angles found");
+        }
+    }
 
 
 
@@ -439,6 +525,7 @@
 
           marker.on('click', () => {
             current_icao = site.icao;
+            tiltAngles = [];
             console.log('current_icao: ',current_icao);
             parseRadarFile(site.icao);
 

@@ -458,7 +458,7 @@ function updateMemoryViews() {
   HEAPU16 = new Uint16Array(b);
   HEAP32 = new Int32Array(b);
   HEAPU32 = new Uint32Array(b);
-  HEAPF32 = new Float32Array(b);
+  Module['HEAPF32'] = HEAPF32 = new Float32Array(b);
   HEAPF64 = new Float64Array(b);
   HEAP64 = new BigInt64Array(b);
   HEAPU64 = new BigUint64Array(b);
@@ -4333,7 +4333,6 @@ missingLibrarySymbols.forEach(missingLibrarySymbol)
   'abort',
   'wasmMemory',
   'wasmExports',
-  'HEAPF32',
   'HEAPF64',
   'HEAP8',
   'HEAP16',
@@ -4586,6 +4585,9 @@ var _get_latitude_topleft = Module['_get_latitude_topleft'] = makeInvalidEarlyAc
 var _get_longitude_topleft = Module['_get_longitude_topleft'] = makeInvalidEarlyAccess('_get_longitude_topleft');
 var _get_latitude_bottomright = Module['_get_latitude_bottomright'] = makeInvalidEarlyAccess('_get_latitude_bottomright');
 var _get_longitude_bottomright = Module['_get_longitude_bottomright'] = makeInvalidEarlyAccess('_get_longitude_bottomright');
+var _get_tilt_angles = Module['_get_tilt_angles'] = makeInvalidEarlyAccess('_get_tilt_angles');
+var _get_tilt_angles_size = Module['_get_tilt_angles_size'] = makeInvalidEarlyAccess('_get_tilt_angles_size');
+var _set_tilt_angles_index = Module['_set_tilt_angles_index'] = makeInvalidEarlyAccess('_set_tilt_angles_index');
 var _set_selected_radar_moment = Module['_set_selected_radar_moment'] = makeInvalidEarlyAccess('_set_selected_radar_moment');
 var _parse_nexrad = Module['_parse_nexrad'] = makeInvalidEarlyAccess('_parse_nexrad');
 var _emscripten_stack_get_end = makeInvalidEarlyAccess('_emscripten_stack_get_end');
@@ -4607,6 +4609,9 @@ function assignWasmExports(wasmExports) {
   Module['_get_longitude_topleft'] = _get_longitude_topleft = createExportWrapper('get_longitude_topleft', 0);
   Module['_get_latitude_bottomright'] = _get_latitude_bottomright = createExportWrapper('get_latitude_bottomright', 0);
   Module['_get_longitude_bottomright'] = _get_longitude_bottomright = createExportWrapper('get_longitude_bottomright', 0);
+  Module['_get_tilt_angles'] = _get_tilt_angles = createExportWrapper('get_tilt_angles', 0);
+  Module['_get_tilt_angles_size'] = _get_tilt_angles_size = createExportWrapper('get_tilt_angles_size', 0);
+  Module['_set_tilt_angles_index'] = _set_tilt_angles_index = createExportWrapper('set_tilt_angles_index', 1);
   Module['_set_selected_radar_moment'] = _set_selected_radar_moment = createExportWrapper('set_selected_radar_moment', 1);
   Module['_parse_nexrad'] = _parse_nexrad = createExportWrapper('parse_nexrad', 2);
   _emscripten_stack_get_end = wasmExports['emscripten_stack_get_end'];

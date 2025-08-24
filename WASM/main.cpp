@@ -29,11 +29,7 @@ constexpr size_t CONTROL_WORD_SIZE = 4;
 char selected_radar_moment[4] = "REF";
 
 //store tilt angles here
-float tilt_angles[25];
-for(int i = 0, i< 25, i++){
-    tilt_angles[i] = -1;
-}
-
+float tilt_angles[50];
 //store selected tilt index here
 int tilt_number_for_data = 0;
 
@@ -1280,6 +1276,23 @@ extern "C" {
     float get_longitude_bottomright() {return longitude_bottomright;}
 
     EMSCRIPTEN_KEEPALIVE
+    float* get_tilt_angles(){
+        return tilt_angles;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+    int get_tilt_angles_size(){
+        return sizeof(tilt_angles) / sizeof(tilt_angles[0]);
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+    void set_tilt_angles_index(const int tilt_num){
+        tilt_number_for_data = tilt_num;
+    }
+
+
+
+    EMSCRIPTEN_KEEPALIVE
     void set_selected_radar_moment(const char* moment) {
         // Copy at most 3 characters to leave room for '\0'
         strncpy(selected_radar_moment, moment, 3);
@@ -1296,6 +1309,12 @@ extern "C" {
             std::cout << "File too small" << std::endl;
             return -1;
         }
+
+        //initialize all tilt angles as -1:
+        for(int i = 0; i< 50; i++){
+            tilt_angles[i] = -1;
+        }
+
         
         //uint8_t* data_ptr = buffer.data();
         std::vector<uint8_t> buffer(data, data + length);
@@ -1365,9 +1384,9 @@ extern "C" {
         int tilt_counter = 0;
         for (auto& tilt : reflectivity_data.Tilts) {
             // do something with each tilt
-            std::cout << "Processing tilt at elevation " << tilt.ElevationAngle << "\n";
-            
-            
+            //std::cout << "Processing tilt at elevation " << tilt.ElevationAngle << "\n";
+            tilt_angles[tilt_counter]= tilt.ElevationAngle;
+            //std::cout << "from array: "<< tilt_angles[tilt_counter] << std::endl;
             tilt_counter++;
         }
 
