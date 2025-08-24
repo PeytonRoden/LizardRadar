@@ -32,3 +32,9 @@ Add dual-polarization moment parsing (ZDR, PHI, RHOHV)
 Add region-based aliasing correction for velocity products
 Interactive overlays: storm tracking, mesocyclone detection, rainfall accumulation
 Fix map overlay issues using more sophisticated refractive index calculations
+
+
+📸 Preview
+
+
+![Radar Demo](examples_images/Example_Usage.gif)
