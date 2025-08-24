@@ -36,5 +36,6 @@ Fix map overlay issues using more sophisticated refractive index calculations
 
 📸 Preview
 
-
-![Radar Demo](examples_images/Example_Usage.gif)
+<p align="center">
+  <img src="example_images/Demo.webp" alt="Radar Demo" width="600"/>
+</p>
