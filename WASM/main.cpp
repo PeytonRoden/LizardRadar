@@ -214,6 +214,14 @@ inline double rad2deg(double radians) {
     return radians * (180.0 / PI);
 }
 
+inline float fold_velocity(float v, float VNYQ) {
+    float range = 2.0f * VNYQ;
+    v = std::fmod(v + VNYQ, range);
+    if (v < 0) v += range;       // wrap negatives
+    return v - VNYQ;
+}
+
+
 // --- Helpers to read big endian values from raw buffer ---
 
 uint16_t read_be16(const uint8_t* p) {
@@ -500,6 +508,9 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
     hdr.seg_num       = read_be16(p);       p += 2;
 
 
+    // std::cout << "in the archive message header II parsing function \n \n \n" << std::endl;
+
+
 
     if (int(hdr.type) == 31 ){
         ////parse out message 31s
@@ -535,21 +546,7 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
         msg31.block_pointer_10 = read_be32(p); p += 4;
 
 
-        // std::memcpy(&msg31, msg_ptr, sizeof(MSG_31));
-        // msg_ptr += sizeof(MSG_31);
-
-        // std::cout << "msg31 id: [" << msg31.id << "]" << std::endl;
-
-        // std::cout << "msg31 collect ms: " << msg31.collect_ms << std::endl;
-        // std::cout << "msg31 collect date: " << msg31.collect_date << std::endl;
-        // std::cout << "msg31 elevation angle: " << msg31.elevation_angle << std::endl;
-        // std::cout << "msg31 azimuth angle: " << msg31.azimuth_angle << std::endl;
-
-        // std::cout << "REF block pointer: " << msg31.block_pointer_4 << std::endl;
-        // std::cout << "VEL block pointer: " << msg31.block_pointer_5 << std::endl;
-        // std::cout << "SW  block pointer: " << msg31.block_pointer_6 << std::endl;
-
-
+        //short for refrence pointer
         const uint8_t* ref_ptr;// Start of the Message 31 (after ArchiveIIMessageHeader)
 
 
@@ -578,27 +575,38 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
 
 
 
-        GENERIC_DATA_BLOCK REF;
-        REF.block_type = *ref_ptr++;
-        std::memcpy(REF.data_name, ref_ptr, 3); ref_ptr += 3;
+        GENERIC_DATA_BLOCK MOMENT;
+        MOMENT.block_type = *ref_ptr++;
+        std::memcpy(MOMENT.data_name, ref_ptr, 3); ref_ptr += 3;
         // Read the remaining fields using big-endian readers:
-        REF.reserved = read_be32(ref_ptr); ref_ptr += 4;
-        REF.gate_count = read_be16(ref_ptr); ref_ptr += 2;
-        REF.first_gate = read_be16s(ref_ptr); ref_ptr += 2;
-        REF.gate_spacing= read_be16s(ref_ptr); ref_ptr += 2;
-        REF.thresh = read_be16s(ref_ptr); ref_ptr += 2;
-        REF.snr_threshold= read_be16s(ref_ptr); ref_ptr += 2;
-        REF.flags = *ref_ptr++;
-        REF.word_size = *ref_ptr++;
-        REF.scale = read_be_float(ref_ptr); ref_ptr += 4;
-        REF.offset = read_be_float(ref_ptr); ref_ptr += 4;
+        MOMENT.reserved = read_be32(ref_ptr); ref_ptr += 4;
+        MOMENT.gate_count = read_be16(ref_ptr); ref_ptr += 2;
+        MOMENT.first_gate = read_be16s(ref_ptr); ref_ptr += 2;
+        MOMENT.gate_spacing= read_be16s(ref_ptr); ref_ptr += 2;
+        MOMENT.thresh = read_be16s(ref_ptr); ref_ptr += 2;
+        MOMENT.snr_threshold= read_be16s(ref_ptr); ref_ptr += 2;
+        MOMENT.flags = *ref_ptr++;
+        MOMENT.word_size = *ref_ptr++;
+        MOMENT.scale = read_be_float(ref_ptr); ref_ptr += 4;
+        MOMENT.offset = read_be_float(ref_ptr); ref_ptr += 4;
 
-        // std::cout << "ref.blocktype: " << REF.block_type << std::endl;
-        // std::cout << "ref.blockname: " << REF.data_name << std::endl;
-        // std::cout << "ref.gatecount: " << REF.gate_count << std::endl;
-        // std::cout << "ref.spacing: " << REF.gate_spacing << std::endl;
-        // std::cout << "ref.scale: " << REF.scale << std::endl;
-        // std::cout << "ref.offset: " << REF.offset << std::endl;
+
+        char moment_buf[4];                    // one extra for '\0'
+        std::memcpy(moment_buf, MOMENT.data_name, 3);
+        moment_buf[3] = '\0';    
+
+        // std::cout << "moment name: " << moment_buf << std::endl;
+        // std::cout << "selected radar moment: "<< selected_radar_moment <<std::endl;
+        if (!cStringsEqual(selected_radar_moment, moment_buf)){
+            // some sort of error in parsing going on, just gonnna skip those data
+            return hdr;
+        }
+        // std::cout << "moment name: " << MOMENT.data_name << std::endl;
+        // std::cout << "gate count:  " << MOMENT.gate_count << std::endl;
+        // std::cout << "gate spacing:  " << MOMENT.gate_spacing << std::endl;
+        // std::cout << "SCALE:  " << MOMENT.scale << std::endl;
+        // std::cout << "offset:  " << MOMENT.offset << std::endl;
+        //std::cout << "word size: " << static_cast<int>(MOMENT.word_size) << std::endl;
 
 
 
@@ -613,7 +621,7 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
 
             VOL_EL_RAD vol_el_rad = parse_vol_el_rad_blocks(msg31_ptr + msg31.block_pointer_1,msg31_ptr + msg31.block_pointer_2,msg31_ptr + msg31.block_pointer_3 );
             tilt_0.vol_el_rad = vol_el_rad    ;
-            tilt_0.gateSpacing = REF.gate_spacing;
+            tilt_0.gateSpacing = MOMENT.gate_spacing;
 
             alltilts.Tilts.push_back(tilt_0);
         } else {
@@ -626,7 +634,7 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
                 tilt_next.ElevationAngle = msg31.elevation_angle;
                 VOL_EL_RAD vol_el_rad = parse_vol_el_rad_blocks(msg31_ptr + msg31.block_pointer_1,msg31_ptr + msg31.block_pointer_2,msg31_ptr + msg31.block_pointer_3 );
                 tilt_next.vol_el_rad = vol_el_rad    ;
-                tilt_next.gateSpacing = REF.gate_spacing;
+                tilt_next.gateSpacing = MOMENT.gate_spacing;
 
                 alltilts.Tilts.push_back(tilt_next);
             }else{
@@ -640,16 +648,37 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
 
         //store tilt information
         // i is gate number
-        for (int i = 0; i < REF.gate_count; ++i) {
-            uint8_t raw_val = data_ptr[i];
+        for (int i = 0; i < MOMENT.gate_count; ++i) {
+
+            float moment_val = 0;
+            //uint8_t raw_val = data_ptr[i];
+            int raw_val = 0;
+            
+            if (MOMENT.word_size == 8) {
+                raw_val = data_ptr[i];
+            }
+            else if (MOMENT.word_size == 16) {
+                raw_val = read_be16((uint8_t*)(data_ptr + i*2));
+            }
+            else {
+                std::cout << "Unsupported word size: " << int(MOMENT.word_size) << std::endl;
+                continue;
+            }
             if (raw_val == 0) continue;
-            float dbz = (raw_val - REF.offset) / REF.scale;
-            float distance_m = i * REF.gate_spacing; // gate_spacing in meters
+
+            moment_val = (raw_val - MOMENT.offset) / MOMENT.scale;
+
+            if (cStringsEqual(selected_radar_moment, "VEL")) {
+                moment_val = fold_velocity(moment_val, current_tilt.vol_el_rad.rad.nyquist_vel);
+                //std::cout << moment_val << ", ";
+            }
+
+            float distance_m = i * MOMENT.gate_spacing; // gate_spacing in meters
 
             RadialData point;
             point.azimuth_deg = msg31.azimuth_angle;
             point.dist = distance_m;
-            point.value = dbz;
+            point.value = moment_val;
 
             if (distance_m > current_tilt.maxDist) current_tilt.maxDist = distance_m;
 
@@ -753,13 +782,20 @@ void colormap_velocity(float vel, uint8_t& r, uint8_t& g, uint8_t& b, float VNYQ
     }
 
     // Clamp velocity into [-VNYQ, VNYQ]
-    float v = std::max(-VNYQ, std::min(VNYQ, vel));
+    //should already be folded
+    //float v = std::max(-VNYQ, std::min(VNYQ, vel));
+    float v = vel;
+    VNYQ = VNYQ/100;
+
+    //std::cout << v << ", ";
 
     // Normalize to [-1, 1]
     float norm = v / VNYQ;
 
+    //std::cout << ": norm: "<< norm << ", ";
+
     // Near zero → gray (shrink this threshold!)
-    if (std::fabs(norm) < 0.01f) { // ±1% of Nyquist
+    if (std::fabs(norm) < 0.00000001f) { // ±1% of Nyquist
         r = g = b = 128;
         return;
     }
