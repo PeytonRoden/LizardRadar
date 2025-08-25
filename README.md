@@ -28,9 +28,9 @@ AWS S3 (NOAA NEXRAD Archive) → Real-time radar data source
 
 🚀 Roadmap
 
-Add dual-polarization moment parsing (ZDR, PHI, RHOHV)
-Add region-based aliasing correction for velocity products
-Interactive overlays: storm tracking, mesocyclone detection, rainfall accumulation
+Add dual-polarization moment parsing (ZDR, PHI, RHOHV), 
+Add region-based aliasing correction for velocity products, 
+Interactive overlays: storm tracking, mesocyclone detection, rainfall accumulation, 
 Fix map overlay issues using more sophisticated refractive index calculations
 
 
