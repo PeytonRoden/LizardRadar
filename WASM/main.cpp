@@ -815,6 +815,48 @@ void colormap_velocity(float vel, uint8_t& r, uint8_t& g, uint8_t& b, float VNYQ
     }
 }
 
+
+
+constexpr float kt2ms = 0.51444f;
+
+void colormap_velocity_evans(float vel, uint8_t& r, uint8_t& g, uint8_t& b,  float VNYQ = 30.0f) {
+    //https://www.wxtools.org/velocity/awips-evans
+    if (std::isnan(vel) || std::isinf(vel)) {
+        r = g = b = 0;
+        return;
+    }
+
+    VNYQ = VNYQ/100;
+
+    // Convert from knots to m/s
+    vel *= 1.0f; // if vel already in m/s, leave as-is
+
+    if (vel <= -120*kt2ms)      { r = 255; g = 0;   b = 128; return; }
+    else if (vel <= -90.5*kt2ms){ r =  static_cast<uint8_t>(255 + (0-255)*(vel+120*kt2ms)/(29.5*kt2ms));
+                                   g = static_cast<uint8_t>(0 + (0-0)*(vel+120*kt2ms)/(29.5*kt2ms));
+                                   b = static_cast<uint8_t>(128 + (160-128)*(vel+120*kt2ms)/(29.5*kt2ms)); return; }
+    else if (vel <= -70*kt2ms)  { r = 0; g = static_cast<uint8_t>(0 + (224-0)*(vel+90.5*kt2ms)/(20.5*kt2ms)); b = static_cast<uint8_t>(160 + (255-160)*(vel+90.5*kt2ms)/(20.5*kt2ms)); return; }
+    else if (vel <= -69.99*kt2ms){ r = 0; g = 255; b = 224; return; }
+    else if (vel <= -60*kt2ms)   { r = 0; g = 255; b = 225; return; }
+    else if (vel <= -59.99*kt2ms){ r = 160; g = 255; b = 208; return; }
+    else if (vel <= -50*kt2ms)   { r = 160; g = 255; b = 208; return; }
+    else if (vel <= -49.99*kt2ms){ r = 160; g = 255; b = 208; return; }
+    else if (vel <= -40*kt2ms)   { r = 0; g = 255; b = 0; return; }
+    else if (vel <= -10*kt2ms)   { r = 16; g = 96; b = 16; return; }
+    else if (vel <= -0.01*kt2ms) { r = 112; g = 128; b = 112; return; }
+    else if (vel <= 0)            { r = 144; g = 128; b = 144; return; }
+    else if (vel <= 10*kt2ms)     { r = 112; g = 0; b = 0; return; }
+    else if (vel <= 40*kt2ms)     { r = 255; g = 0; b = 0; return; }
+    else if (vel <= 48.6*kt2ms)   { r = 255; g = 0; b = 128; return; }
+    else if (vel <= 49.5*kt2ms)   { r = 255; g = 0; b = 144; return; }
+    else if (vel <= 69.99*kt2ms)  { r = 255; g = 196; b = 255; return; }
+    else if (vel <= 70*kt2ms)     { r = 255; g = 96; b = 0; return; }
+    else if (vel <= 120*kt2ms)    { r = 255; g = 255; b = 0; return; }
+
+    // Fallback RF
+    r = 128; g = 0; b = 208;
+}
+
 void colormap_dbz(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
     if (std::isnan(dbz) || std::isinf(dbz)) {
         r = g = b = 0;
@@ -854,6 +896,79 @@ void colormap_dbz(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
     }
 }
 
+void colormap_reflectivity_lacrosse(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
+    //https://www.wxtools.org/reflectivity/2004-lacrosse-br
+    if (std::isnan(dbz) || std::isinf(dbz)) {
+        r = g = b = 0;
+        return;
+    }
+
+    if (dbz <= -30) { r = 0; g = 0; b = 0; return; }
+    else if (dbz <= 0)   { r = 105; g = 126; b = 108; return; }
+    else if (dbz <= 5)   { r = 94; g = 94; b = 94; return; }
+    else if (dbz <= 10)  { r = 131; g = 131; b = 131; return; }
+    else if (dbz <= 15)  { r = 171; g = 171; b = 171; return; }
+    else if (dbz <= 20)  { r = 0; g = 225; b = 255; return; }
+    else if (dbz <= 25)  { r = 0; g = 150; b = 255; return; }
+    else if (dbz <= 30)  { r = 0; g = 255; b = 0; return; }
+    else if (dbz <= 35)  { r = 0; g = 180; b = 0; return; }
+    else if (dbz <= 40)  { r = 255; g = 250; b = 0; return; }
+    else if (dbz <= 45)  { r = 255; g = 170; b = 0; return; }
+    else if (dbz <= 50)  { r = 255; g = 0; b = 0; return; }
+    else if (dbz <= 60)  { r = 254; g = 222; b = 255; return; }
+    else if (dbz <= 65)  { r = 255; g = 99; b = 255; return; }
+    else if (dbz <= 70)  { r = 173; g = 0; b = 176; return; }
+    else if (dbz <= 75)  { r = 255; g = 255; b = 255; return; }
+
+    // Anything above max
+    r = 255; g = 255; b = 255;
+}
+
+void colormap_correlation_coefficient(float rho, uint8_t& r, uint8_t& g, uint8_t& b) {
+    //https://www.wxtools.org/correlation-coefficient/awips-rho-cc
+    if (std::isnan(rho) || std::isinf(rho)) {
+        r = g = b = 0;
+        return;
+    }
+
+    if (rho >= 1.05f) { r = 164; g = 54;  b = 150; return; }
+    else if (rho >= 1.00f) { r = 255; g = 180; b = 215; return; }
+    else if (rho >= 0.99f) { r = 139; g = 30;  b = 77; return; }
+    else if (rho >= 0.97f) { r = 225; g = 3;   b = 0; return; }
+    else if (rho >= 0.95f) { r = 255; g = 140; b = 0; return; }
+    else if (rho >= 0.90f) { r = 255; g = 255; b = 0; return; }
+    else if (rho >= 0.85f) { r = 135; g = 215; b = 10; return; }
+    else if (rho >= 0.80f) { r = 95;  g = 245; b = 100; return; }
+    else if (rho >= 0.75f) { r = 120; g = 120; b = 255; return; }
+    else if (rho >= 0.60f) { r = 10;  g = 10;  b = 190; return; }
+    else if (rho >= 0.45f) { r = 15;  g = 15;  b = 140; return; }
+    else                   { r = 15;  g = 15;  b = 140; return; }
+}
+
+void colormap_spectrum_width(float vel_ms, uint8_t& r, uint8_t& g, uint8_t& b) {
+    //https://www.wxtools.org/spectrum-width/bens-sw
+    if (std::isnan(vel_ms) || std::isinf(vel_ms)) {
+        r = g = b = 0;
+        return;
+    }
+
+    // Convert m/s → knots
+    float vel = vel_ms * 1.9426f;
+
+    if (vel <= 0)      { r = 20;  g = 5;   b = 72;  return; }
+    else if (vel <= 2) { r = 50;  g = 20;  b = 140; return; }
+    else if (vel <= 4) { r = 124; g = 38;  b = 190; return; }
+    else if (vel <= 7) { r = 218; g = 55;  b = 120; return; }
+    else if (vel <= 15){ r = 251; g = 126; b = 33;  return; }
+    else if (vel <= 18){ r = 255; g = 255; b = 0;   return; }
+    else if (vel <= 22){ r = 153; g = 255; b = 51;  return; }
+    else if (vel <= 30){ r = 0;   g = 153; b = 230; return; }
+    else if (vel <= 35){ r = 0;   g = 17;  b = 26;  return; }
+    else if (vel <= 40){ r = 255; g = 255; b = 255; return; }
+
+    // Fallback RF color
+    r = 117; g = 0; b = 117;
+}
 
 void saveTiltAsPNGInterpolate(const SingleTilt& tilt, const std::string& filename, const int SIZE = 1000, float M_PER_PIXEL = 800.0f) {
 
@@ -1126,14 +1241,14 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
                 uint8_t r, g, b;
 
                 if (cStringsEqual(selected_radar_moment, "REF")) {
-                    colormap_dbz(value, r, g, b);
+                    colormap_reflectivity_lacrosse(value, r, g, b);
                 }
                 else if (cStringsEqual(selected_radar_moment, "VEL")) {
                     //std::cout << "nyquist velocity : "<< nyquist_vel << std::endl;
-                    colormap_velocity(value, r, g, b, float(nyquist_vel));
+                    colormap_velocity_evans(value, r, g, b, float(nyquist_vel));
                 }
                 else if (cStringsEqual(selected_radar_moment, "SW ")) {
-                    colormap_dbz(value, r, g, b); 
+                    colormap_spectrum_width(value, r, g, b); 
                 }
                 else if (cStringsEqual(selected_radar_moment, "ZDR")) {
                     colormap_dbz(value, r, g, b);
@@ -1142,7 +1257,7 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
                     colormap_dbz(value, r, g, b);
                 }
                 else if (cStringsEqual(selected_radar_moment, "RHO")) {
-                    colormap_dbz(value, r, g, b);
+                    colormap_correlation_coefficient(value, r, g, b);
                 }
                 else {
                     colormap_dbz(value, r, g, b);
