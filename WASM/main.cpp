@@ -253,6 +253,157 @@ float read_be_float(const uint8_t* p) {
     return f;
 }
 
+
+#include <array>
+#include <stdexcept>
+
+class AtmosphericRayTracer {
+public:
+    AtmosphericRayTracer(double earth_radius = 6371000.0,
+                         double N0 = 315.0,
+                         double h0 = 8500.0)
+        : earth_radius(earth_radius), N0(N0), h0(h0) {}
+
+    // Calculate refractive index at height h
+    double refractive_index(double h) const {
+        double N = N0 * std::exp(-h / h0);
+        return 1.0 + N / 1e6;
+    }
+
+    // Calculate dn/dh at height h
+    double refractive_index_gradient(double h) const {
+        double N = N0 * std::exp(-h / h0);
+        double dN_dh = -N / h0;
+        return dN_dh / 1e6;
+    }
+
+    // Ray equations for RK integration
+    std::array<double, 4> ray_equations(double t,
+                                        const std::array<double, 4>& state) const {
+        double x = state[0];
+        double y = state[1];
+        double px = state[2];
+        double py = state[3];
+
+        // Current height above Earth surface
+        double r = std::sqrt(x * x + y * y);
+        double h = r - earth_radius;
+        if (h < 0) h = 0;
+
+        // Current refractive index and gradient
+        double n = refractive_index(h);
+        double dn_dh = refractive_index_gradient(h);
+
+        // Unit vector pointing radially outward
+        double grad_n_x = 0.0;
+        double grad_n_y = 0.0;
+        if (r > 0) {
+            grad_n_x = dn_dh * x / r;
+            grad_n_y = dn_dh * y / r;
+        } else {
+            grad_n_y = dn_dh;
+        }
+
+        // Ray equations
+        double dx_ds = px / n;
+        double dy_ds = py / n;
+        double dpx_ds = grad_n_x;
+        double dpy_ds = grad_n_y;
+
+        return {dx_ds, dy_ds, dpx_ds, dpy_ds};
+    }
+
+    // Arc angle between two vectors from circle center
+    double arc_angle(double center_x, double center_y,
+                     double start_x, double start_y,
+                     double last_x, double last_y) const {
+        double ux = start_x - center_x;
+        double uy = start_y - center_y;
+        double vx = last_x - center_x;
+        double vy = last_y - center_y;
+
+        double u_norm = std::sqrt(ux * ux + uy * uy);
+        double v_norm = std::sqrt(vx * vx + vy * vy);
+
+        if (u_norm == 0.0 || v_norm == 0.0) {
+            throw std::runtime_error("One point coincides with the circle center.");
+        }
+
+        double dot = ux * vx + uy * vy;
+        double cos_theta = dot / (u_norm * v_norm);
+
+        // Clamp to [-1, 1]
+        if (cos_theta > 1.0) cos_theta = 1.0;
+        if (cos_theta < -1.0) cos_theta = -1.0;
+
+        return std::acos(cos_theta); // radians
+    }
+
+    // Main ray tracing function
+    float get_earth_arc_angle_station_to_beam_end(
+        double start_x, double start_y,
+        double start_angle_rad,
+        double max_distance = 400000.0,
+        double step_size = 100.0) const
+    {
+        // Initial position
+        double x0 = start_x;
+        double y0 = start_y;
+        double h0 = std::sqrt(x0 * x0 + y0 * y0) - earth_radius;
+        double n0 = refractive_index(h0);
+
+        // Initial ray parameter
+        double px0 = n0 * std::cos(start_angle_rad);
+        double py0 = n0 * std::sin(start_angle_rad);
+
+        std::array<double, 4> state = {x0, y0, px0, py0};
+
+        double s = 0.0;
+        double last_x = x0;
+        double last_y = y0;
+
+        while (s < max_distance) {
+            auto k1 = scale(step_size, ray_equations(s, state));
+            auto k2 = scale(step_size, ray_equations(s + step_size / 2.0, add(state, scale(0.5, k1))));
+            auto k3 = scale(step_size, ray_equations(s + step_size / 2.0, add(state, scale(0.5, k2))));
+            auto k4 = scale(step_size, ray_equations(s + step_size, add(state, k3)));
+
+            state = add(state, scale(1.0 / 6.0, add(add(k1, scale(2.0, k2)), add(scale(2.0, k3), k4))));
+            s += step_size;
+
+            last_x = state[0];
+            last_y = state[1];
+
+            // Check if ray hits Earth surface
+            double r = std::sqrt(last_x * last_x + last_y * last_y);
+            if (r <= earth_radius) {
+                break;
+            }
+        }
+
+        double theta = arc_angle(0, 0, start_x, start_y, last_x, last_y);
+        std::cout << "Arc angle (rad): " << theta << "\n";
+
+        return theta;
+    }
+
+    double earth_radius;
+    double N0;
+    double h0;
+
+    // Vector helpers
+    std::array<double, 4> add(const std::array<double, 4>& a,
+                              const std::array<double, 4>& b) const {
+        return {a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]};
+    }
+
+    std::array<double, 4> scale(double s,
+                                const std::array<double, 4>& a) const {
+        return {s * a[0], s * a[1], s * a[2], s * a[3]};
+    }
+};
+
+
 // --- Decompress a single bzip2 block ---
 std::vector<uint8_t> decompress_bzip_block(const uint8_t* input, size_t size) {
     std::vector<uint8_t> output(50000); // Estimate max decompressed size
@@ -1323,65 +1474,31 @@ get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation
     
     float earth_radius_m = 6371000;
 
-    //correct for beam curving:
-    // Constants
-    const float N0 = 310.0f;    // Standard refractivity at surface
-    const float h0 = 7500.0f;   // Scale height in meters
-
-    // Flat Earth beam height calculation
-    //float H = beam_len * std::sin(elevation_angle * M_PI / 180.0f);
-
-    //H is beam height
-    float r0 = earth_radius_m;                                   // antenna_height_m (set it or 0)
-    float H = std::sqrt(r0*r0 + beam_len*beam_len + 2.0f * r0 * beam_len * std::sin(elevation_angle * M_PI / 180.0f)) - earth_radius_m;
-    std::cout << "elevation angle: " << elevation_angle << std::endl;
-    std::cout << "height: " << H << std::endl;
-
-    // N_h = N0 * exp(-H / h0)
-    float N_h = N0 * std::exp(-H / h0);
-    // dN/dh = - (N0 / h0) * exp(-H / h0)
-    float dN_dh = - (N0 / h0) * std::exp(-H / h0);
-
-    std::cout << "dN_dH: " << dN_dh << std::endl;
-
-    // Calculate average refractivity gradient over height H
-    float dN_dh_avg = (N0 * (1.0f - std::exp(-H / h0))) / H;
-    dN_dh_avg = N0 / h0; 
-    dN_dh_avg = (N0 / h0) * std::sqrt((1.0f - std::exp(-2*H / h0)) * h0 / (2*H));  // RMS average
-
-    // Since refractivity decreases with height, gradient is negative
-    dN_dh_avg = -dN_dh_avg;
-
-    std::cout << "average dN/dh: " << dN_dh_avg << std::endl;
-
-    // Average reractivity
-    float N_avg = (H != 0.0f) ? N0 * h0 * (1.0f - std::exp(-H / h0)) / H : N0;
-
-    std::cout << "N_avg: " << N_avg << std::endl;
-    // Beam angle calculation
-    float theta = elevation_angle* M_PI / 180.0f;
-    float n = 1.0f + 1e-6f * N_h;
-    float kappa = -(1.0f / n) * (1e-6f * dN_dh_avg) * std::cos(theta);
-
-    float beam_radius = 1/kappa;
-
-    std::cout << "beam radius: " << beam_radius <<std::endl;
-
-    earth_radius_m = (earth_radius_m * beam_radius)/(beam_radius-earth_radius_m);
-
-
     std::cout << "earth radius M: " << earth_radius_m << std:: endl;
 
 
+    // float center_to_beam = std::sqrt(
+    //     beam_len * beam_len +
+    //     earth_radius_m * earth_radius_m -
+    //     2 * earth_radius_m * beam_len * std::cos(deg2rad(90 + elevation_angle)));
 
-    float center_to_beam = std::sqrt(
-        beam_len * beam_len +
-        earth_radius_m * earth_radius_m -
-        2 * earth_radius_m * beam_len * std::cos(deg2rad(90 + elevation_angle)));
+    // float arc_angle = std::acos(
+    //     (beam_len * beam_len - earth_radius_m * earth_radius_m - center_to_beam * center_to_beam) /
+    //     (-2 * earth_radius_m * center_to_beam));
 
-    float arc_angle = std::acos(
-        (beam_len * beam_len - earth_radius_m * earth_radius_m - center_to_beam * center_to_beam) /
-        (-2 * earth_radius_m * center_to_beam));
+    AtmosphericRayTracer tracer;
+
+    float arc_angle = tracer.get_earth_arc_angle_station_to_beam_end(
+        0.0,
+        tracer.earth_radius,
+        deg2rad(elevation_angle),
+        max_dist,
+        20.0
+    );
+
+
+
+    std::cout << "arc angle: "<< arc_angle <<std::endl;
 
     float arc_len_m = arc_angle * earth_radius_m;
 
@@ -1461,7 +1578,7 @@ extern "C" {
             return -1;
         }
 
-        //initialize all tilt angles as -1:
+        //initialize all tilt angles as -1, these get reupdated each time a new icao gets run
         for(int i = 0; i< 50; i++){
             tilt_angles[i] = -1;
         }

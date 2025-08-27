@@ -22,7 +22,7 @@ import s3fs
 
 
 def get_latest_nexrad_file(station):
-    fs = s3fs.S3FileSystem(anon=True)
+    fs = s3fs.S3FileSystem(anon=True, use_listings_cache=False)
     bucket = 'noaa-nexrad-level2'
     timestamp_pattern = re.compile(rf"{station}(\d{{8}})_(\d{{6}})_V06$")  # Match _V06 files only
 

@@ -275,6 +275,8 @@
 
       //var corsProxy = "https://corsproxy.io/?";
       var corsProxy = "http://localhost:8082/";
+      //corsProxy = "https://localtunnel:71.75.203.231@fine-forks-change.loca.lt/";
+      //corsProxy = "https://fine-forks-change.loca.lt/";
 
       //const url = "https://noaa-nexrad-level2.s3.amazonaws.com/2022/03/22/KHGX/KHGX20220322_120125_V06";
       let url =      data.url;
@@ -490,17 +492,10 @@
           zoom: 2
       });
 
-      // // Use WMS instead of tiles - this handles EPSG:4326 correctly
-      // L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
-      //     layers: 'OSM-WMS',
-      //     format: 'image/png',
-      //     transparent: true,
-      //     crs: L.CRS.EPSG4326,
-      //     attribution: 'OSM-WMS by terrestris'
-      // }).addTo(map);
 
       L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
-        layers: 'TOPO-OSM-WMS',
+        //layers: 'TOPO-OSM-WMS',
+        layers: 'OSM-Overlay-WMS',
         format: 'image/png',
         transparent: false,
         crs: L.CRS.EPSG4326,
