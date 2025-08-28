@@ -75,8 +75,12 @@ WSGI_APPLICATION = 'lizardradar.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'myproject_db',
+        'USER': 'myproject_user',
+        'PASSWORD': 'mypassword',
+        'HOST': 'localhost',  # or your DB host
+        'PORT': '5432',       # default PostgreSQL port
     }
 }
 
@@ -125,3 +129,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/1"
+
+from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    "poll-weather-warnings": {
+        "task": "radar.tasks.get_regional_warnings",
+        "schedule": 30.0  # every 30 seconds
+    },
+}

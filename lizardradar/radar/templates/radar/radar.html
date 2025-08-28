@@ -273,30 +273,29 @@
 
       console.log(`Parsing radar for site ${icao}`);
 
-      //var corsProxy = "https://corsproxy.io/?";
-      var corsProxy = "http://localhost:8082/";
-      //corsProxy = "https://localtunnel:71.75.203.231@fine-forks-change.loca.lt/";
-      //corsProxy = "https://fine-forks-change.loca.lt/";
+      // //var corsProxy = "https://corsproxy.io/?";
+      // var corsProxy = "http://localhost:8082/";
+      // let url =      data.url;
+      // console.log("Radar URL:", data.url);
+      // //get date/time from url and dipslay: 
+      // const localDate = parseNexradUrlDateLocal(url);
+      // document.getElementById('rightInfo').innerHTML = `<strong>${localDate.toLocaleString()}</strong> ` ;
+      // console.log("proxy url: " , corsProxy + encodeURIComponent(url))
+      // console.log("proxy url: " , corsProxy + url) 
+      // const raw = await fetch(corsProxy + url)
+      //   .then(r => r.arrayBuffer())
+      //   .then(buf => new Uint8Array(buf));
 
-      //const url = "https://noaa-nexrad-level2.s3.amazonaws.com/2022/03/22/KHGX/KHGX20220322_120125_V06";
+      var corsProxy = "https://corsproxy.io/?";
       let url =      data.url;
       console.log("Radar URL:", data.url);
-
       //get date/time from url and dipslay: 
       const localDate = parseNexradUrlDateLocal(url);
       document.getElementById('rightInfo').innerHTML = `<strong>${localDate.toLocaleString()}</strong> ` ;
-
-
-      console.log("proxy url: " , corsProxy + encodeURIComponent(url))
-      console.log("proxy url: " , corsProxy + url)
-
-      // const raw = await fetch(corsProxy + encodeURIComponent(url))
-      //   .then(r => r.arrayBuffer())
-      //   .then(buf => new Uint8Array(buf));
-      
-      const raw = await fetch(corsProxy + url)
+      const raw = await fetch(corsProxy + encodeURIComponent(url))
         .then(r => r.arrayBuffer())
         .then(buf => new Uint8Array(buf));
+
 
       const ptr = instance._malloc(raw.length);
       instance.HEAPU8.set(raw, ptr);
@@ -460,6 +459,59 @@
             console.log("No valid tilt angles found");
         }
     }
+
+    let warningLayers = {}; // keep track of layers by nws_id
+
+    async function updateWarnings() {
+        const eventColors = {
+            "Special Weather Statement": "blue",
+            "Tornado Warning": "red",
+            "Severe Thunderstorm Warning": "orange",
+            "Flash Flood Warning": "green",
+            "Winter Storm Warning": "purple",
+            "Coastal Flood Warning": "cyan",
+            "Special Marine Warning": "teal"
+        };
+        try {
+            const res = await fetch("/radar/api/warnings/");
+            const data = await res.json();
+
+            const currentIds = new Set();
+
+            data.warnings.forEach(w => {
+                currentIds.add(w.nws_id);
+
+                // If we already drew this warning, skip
+                if (warningLayers[w.nws_id]) return;
+
+                // Draw the GeoJSON on the map
+                // console.log("event: ", w.event)
+
+                  const layer = L.geoJSON(w.geojson, {
+                      style: { color: eventColors[w.event], weight: 2, fillOpacity: 0.0 },
+                      onEachFeature: (feature, layer) => {
+                          layer.bindPopup(`<strong>${w.event}</strong><br>${w.headline}`);
+                      }
+                  }).addTo(map);
+
+                warningLayers[w.nws_id] = layer;
+            });
+
+            // Remove warnings that no longer exist
+            for (const id in warningLayers) {
+                if (!currentIds.has(id)) {
+                    map.removeLayer(warningLayers[id]);
+                    delete warningLayers[id];
+                }
+            }
+        } catch (err) {
+            console.error("Failed to fetch warnings:", err);
+        }
+    }
+
+    // Update every 60 seconds
+    updateWarnings();
+    setInterval(updateWarnings, 30_000);
 
 
 

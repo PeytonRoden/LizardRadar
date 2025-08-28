@@ -1,6 +1,8 @@
 from django.shortcuts import render
 from django.http import JsonResponse
 import os
+from django.utils.timezone import make_aware
+from django.utils.dateparse import parse_datetime
 
 def radar_map_view(request):
     return render(request, 'radar/radar.html')
@@ -28,6 +30,7 @@ def get_latest_nexrad_file(station):
 
     for offset in range(2):
         date = datetime.utcnow() - timedelta(days=offset)
+        #print(date)
         prefix = date.strftime(f"%Y/%m/%d/{station}/")
         try:
             files = fs.ls(f"{bucket}/{prefix}")
@@ -43,6 +46,7 @@ def get_latest_nexrad_file(station):
                     return datetime.min
                 # Sort files by datetime, latest first
                 filtered_files = [f for f in files if os.path.basename(f).endswith('_V06') and not os.path.basename(f).endswith('_MDM')]
+                #print(filtered_files)
                 if not filtered_files:
                     continue  # No matching _V06 files, try previous day
                 filtered_files.sort(key=extract_datetime, reverse=True)
@@ -111,3 +115,33 @@ def render_radar_image(request, icao):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+
+from .models import Warning
+
+def warnings_json(request):
+    
+    warnings = Warning.objects.all()
+    data = []
+    # for w in warnings:
+    #     data.append({
+    #         "nws_id": w.nws_id,
+    #         "event": w.event,
+    #         "headline": w.headline,
+    #         "area_desc": w.area_desc,
+    #         "effective": w.effective.isoformat() if w.effective else None,
+    #         "expires": make_aware(parse_datetime(w.expires.isoformat())) if w.expires else None,
+    #         "geojson": w.geojson,
+    #     })
+    for w in warnings:
+        data.append({
+            "nws_id": w.nws_id,
+            "event": w.event,
+            "headline": w.headline,
+            "area_desc": w.area_desc,
+            "effective": w.effective.isoformat() if w.effective else None,
+            "expires": w.expires.isoformat() if w.expires else None,
+            "geojson": w.geojson,
+        })
+    return JsonResponse({"warnings": data})
