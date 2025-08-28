@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 import os
 from pathlib import Path
+from decouple import config
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,10 +22,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-y*wp96hopdwhon(p5!7zu#t*4sw4n#_1$)&-2c&s3$=*h7x7mi'
+# SECRET_KEY = 'django-insecure-y*wp96hopdwhon(p5!7zu#t*4sw4n#_1$)&-2c&s3$=*h7x7mi'
+
+
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# DEBUG = os.environ.get(DJANGO_DEBUG)
 
 ALLOWED_HOSTS = []
 
@@ -73,17 +77,21 @@ WSGI_APPLICATION = 'lizardradar.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+
+
+SECRET_KEY = config("DJANGO_SECRET_KEY")
+DEBUG = config("DJANGO_DEBUG", default=False, cast=bool)
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'myproject_db',
-        'USER': 'myproject_user',
-        'PASSWORD': 'mypassword',
-        'HOST': 'localhost',  # or your DB host
-        'PORT': '5432',       # default PostgreSQL port
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": config("POSTGRES_DB"),
+        "USER": config("POSTGRES_USER"),
+        "PASSWORD": config("POSTGRES_PASSWORD"),
+        "HOST": config("POSTGRES_HOST"),
+        "PORT": config("POSTGRES_PORT"),
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators

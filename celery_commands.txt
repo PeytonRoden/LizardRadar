@@ -1,0 +1,2 @@
+celery -A lizardradar worker --loglevel=info
+celery -A lizardradar beat --loglevel=info
