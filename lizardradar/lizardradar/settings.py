@@ -29,7 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = os.environ.get(DJANGO_DEBUG)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS =  [ "lizardradar.com", "www.lizardradar.com", "127.0.0.1", "localhost"]
 
 
 # Application definition
@@ -128,6 +128,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+# Where collectstatic will copy files to:
+# STATIC_ROOT = BASE_DIR / "staticfiles"
+STATIC_ROOT = "/var/www/LizardRadar/static/"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
