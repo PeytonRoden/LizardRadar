@@ -8,14 +8,15 @@
 #include <iterator>   // for std::ostream_iterator
 #include <cstdlib>
 #include <queue>
-
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <emscripten.h>
 #include "stb_image_write.h"
 #include <cmath>
-#include <cstdint>
 #include <vector>
 #include <string>
+
+#include <iomanip>  // for std::setprecision
+
 
 // --- Constants ---
 constexpr size_t RECORD_SIZE = 2432;
@@ -45,7 +46,6 @@ float longitude_topleft;
 float latitude_bottomright;
 float longitude_bottomright;
 
-//hi
 
 // --- Structs based on Py-ART format descriptions ---
 
@@ -186,6 +186,8 @@ struct VOL_EL_RAD{
 struct RadialData {
     float azimuth_deg;
     float dist;     // gate_index * gate_spacing
+    float dist_min;  //from uncertainty in elevation angle +/- 0.5degrees
+    float dist_max; //from uncertainty in elevation angle +/- 0.5degrees
     float value;    // e.g., dBZ, velocity, spectrum width
 };
 
@@ -204,6 +206,13 @@ struct AllTilt {
 };
 
 #pragma pack(pop)
+
+// declare function
+float get_arc_len_m_law_of_cosines(float elevation_angle, 
+                                    float bearing_angle, float r);
+
+// Function pointer type for colormaps
+typedef void (*ColorMapFunc)(float value, uint8_t& r, uint8_t& g, uint8_t& b);
 
 constexpr double PI = 3.14159265358979323846;
 
@@ -404,42 +413,204 @@ public:
 };
 
 
-// --- Decompress a single bzip2 block ---
-std::vector<uint8_t> decompress_bzip_block(const uint8_t* input, size_t size) {
-    std::vector<uint8_t> output(50000); // Estimate max decompressed size
-    unsigned int out_len = output.size();
-    int ret = BZ2_bzBuffToBuffDecompress(reinterpret_cast<char*>(output.data()), &out_len,
-                                         const_cast<char*>(reinterpret_cast<const char*>(input)),
-                                         size, 0, 0);
-    if (ret != BZ_OK) {
-        std::cerr << "Bzip2 decompression failed with code " << ret << std::endl;
-        return {};
+// ===== COLORMAP CLASS =====
+class ColorMapper {
+public:
+    using ColorMapFunc = void (*)(float value, uint8_t& r, uint8_t& g, uint8_t& b);
+    static void colormap_velocity_evans(float vel, uint8_t& r, uint8_t& g, uint8_t& b) {
+        //https://www.wxtools.org/velocity/awips-evans
+        if (std::isnan(vel) || std::isinf(vel)) {
+            r = g = b = 0;
+            return;
+        }
+
+
+        // Convert from knots to m/s
+        vel *= 1.0f; // if vel already in m/s, leave as-is
+
+        if (vel <= -120*kt2ms)      { r = 255; g = 0;   b = 128; return; }
+        else if (vel <= -90.5*kt2ms){ r =  static_cast<uint8_t>(255 + (0-255)*(vel+120*kt2ms)/(29.5*kt2ms));
+                                    g = static_cast<uint8_t>(0 + (0-0)*(vel+120*kt2ms)/(29.5*kt2ms));
+                                    b = static_cast<uint8_t>(128 + (160-128)*(vel+120*kt2ms)/(29.5*kt2ms)); return; }
+        else if (vel <= -70*kt2ms)  { r = 0; g = static_cast<uint8_t>(0 + (224-0)*(vel+90.5*kt2ms)/(20.5*kt2ms)); b = static_cast<uint8_t>(160 + (255-160)*(vel+90.5*kt2ms)/(20.5*kt2ms)); return; }
+        else if (vel <= -69.99*kt2ms){ r = 0; g = 255; b = 224; return; }
+        else if (vel <= -60*kt2ms)   { r = 0; g = 255; b = 225; return; }
+        else if (vel <= -59.99*kt2ms){ r = 160; g = 255; b = 208; return; }
+        else if (vel <= -50*kt2ms)   { r = 160; g = 255; b = 208; return; }
+        else if (vel <= -49.99*kt2ms){ r = 160; g = 255; b = 208; return; }
+        else if (vel <= -40*kt2ms)   { r = 0; g = 255; b = 0; return; }
+        else if (vel <= -10*kt2ms)   { r = 16; g = 96; b = 16; return; }
+        else if (vel <= -0.01*kt2ms) { r = 112; g = 128; b = 112; return; }
+        else if (vel <= 0)            { r = 144; g = 128; b = 144; return; }
+        else if (vel <= 10*kt2ms)     { r = 112; g = 0; b = 0; return; }
+        else if (vel <= 40*kt2ms)     { r = 255; g = 0; b = 0; return; }
+        else if (vel <= 48.6*kt2ms)   { r = 255; g = 0; b = 128; return; }
+        else if (vel <= 49.5*kt2ms)   { r = 255; g = 0; b = 144; return; }
+        else if (vel <= 69.99*kt2ms)  { r = 255; g = 196; b = 255; return; }
+        else if (vel <= 70*kt2ms)     { r = 255; g = 96; b = 0; return; }
+        else if (vel <= 120*kt2ms)    { r = 255; g = 255; b = 0; return; }
+
+        // Fallback RF
+        r = 128; g = 0; b = 208;
     }
-    output.resize(out_len);
-    return output;
-}
 
+    static void colormap_dbz(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
+        if (std::isnan(dbz) || std::isinf(dbz)) {
+            r = g = b = 0;
+            return;
+        }
 
-// Decompress one bzip2 block (input: compressed data and size)
-// Returns decompressed data or empty vector if failed
-std::vector<uint8_t> decompress_bzip2_block(const uint8_t* input, size_t input_size) {
-    const size_t output_max_size = 50000; // adjust as needed
-    std::vector<uint8_t> output(output_max_size);
-    unsigned int dest_len = static_cast<unsigned int>(output_max_size);
+        struct ColorStep {
+            float threshold;
+            uint8_t r, g, b;
+        };
 
-    int ret = BZ2_bzBuffToBuffDecompress(
-        reinterpret_cast<char*>(output.data()), &dest_len,
-        const_cast<char*>(reinterpret_cast<const char*>(input)), static_cast<unsigned int>(input_size),
-        0, 0);
+        static const ColorStep scale[] = {
+            { 5.0f,   4, 233, 231 },  // light blue
+            { 10.0f,  1, 159, 244 },
+            { 15.0f,  3, 0, 244 },
+            { 20.0f,  2, 253, 2 },
+            { 25.0f,  1, 197, 1 },
+            { 30.0f,  0, 142, 0 },
+            { 35.0f,  253, 248, 2 },
+            { 40.0f,  229, 188, 0 },
+            { 45.0f,  253, 149, 0 },
+            { 50.0f,  253, 0, 0 },
+            { 55.0f,  212, 0, 0 },
+            { 60.0f,  188, 0, 0 },
+            { 65.0f,  248, 0, 253 }, // magenta
+            { 70.0f,  152, 84, 198 },
+            { INFINITY, 255, 255, 255 }  // fallback (white)
+        };
 
-    if (ret != BZ_OK) {
-        std::cerr << "BZip2 decompression failed with code: " << ret << std::endl;
-        return {};
+        for (const auto& step : scale) {
+            if (dbz < step.threshold) {
+                r = step.r;
+                g = step.g;
+                b = step.b;
+                return;
+            }
+        }
     }
 
-    output.resize(dest_len);
-    return output;
-}
+    static void colormap_reflectivity_lacrosse(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
+        //https://www.wxtools.org/reflectivity/2004-lacrosse-br
+        if (std::isnan(dbz) || std::isinf(dbz)) {
+            r = g = b = 0;
+            return;
+        }
+
+        if (dbz <= -30) { r = 0; g = 0; b = 0; return; }
+        else if (dbz <= 0)   { r = 105; g = 126; b = 108; return; }
+        else if (dbz <= 5)   { r = 94; g = 94; b = 94; return; }
+        else if (dbz <= 10)  { r = 131; g = 131; b = 131; return; }
+        else if (dbz <= 15)  { r = 171; g = 171; b = 171; return; }
+        else if (dbz <= 20)  { r = 0; g = 225; b = 255; return; }
+        else if (dbz <= 25)  { r = 0; g = 150; b = 255; return; }
+        else if (dbz <= 30)  { r = 0; g = 255; b = 0; return; }
+        else if (dbz <= 35)  { r = 0; g = 180; b = 0; return; }
+        else if (dbz <= 40)  { r = 255; g = 250; b = 0; return; }
+        else if (dbz <= 45)  { r = 255; g = 170; b = 0; return; }
+        else if (dbz <= 50)  { r = 255; g = 0; b = 0; return; }
+        else if (dbz <= 60)  { r = 254; g = 222; b = 255; return; }
+        else if (dbz <= 65)  { r = 255; g = 99; b = 255; return; }
+        else if (dbz <= 70)  { r = 173; g = 0; b = 176; return; }
+        else if (dbz <= 75)  { r = 255; g = 255; b = 255; return; }
+
+        // Anything above max
+        r = 255; g = 255; b = 255;
+    }
+
+    static void colormap_correlation_coefficient(float rho, uint8_t& r, uint8_t& g, uint8_t& b) {
+        //https://www.wxtools.org/correlation-coefficient/awips-rho-cc
+        if (std::isnan(rho) || std::isinf(rho)) {
+            r = g = b = 0;
+            return;
+        }
+
+        if (rho >= 1.05f) { r = 164; g = 54;  b = 150; return; }
+        else if (rho >= 1.00f) { r = 255; g = 180; b = 215; return; }
+        else if (rho >= 0.99f) { r = 139; g = 30;  b = 77; return; }
+        else if (rho >= 0.97f) { r = 225; g = 3;   b = 0; return; }
+        else if (rho >= 0.95f) { r = 255; g = 140; b = 0; return; }
+        else if (rho >= 0.90f) { r = 255; g = 255; b = 0; return; }
+        else if (rho >= 0.85f) { r = 135; g = 215; b = 10; return; }
+        else if (rho >= 0.80f) { r = 95;  g = 245; b = 100; return; }
+        else if (rho >= 0.75f) { r = 120; g = 120; b = 255; return; }
+        else if (rho >= 0.60f) { r = 10;  g = 10;  b = 190; return; }
+        else if (rho >= 0.45f) { r = 15;  g = 15;  b = 140; return; }
+        else                   { r = 15;  g = 15;  b = 140; return; }
+    }
+
+    static void colormap_spectrum_width(float vel_ms, uint8_t& r, uint8_t& g, uint8_t& b) {
+        //https://www.wxtools.org/spectrum-width/bens-sw
+        if (std::isnan(vel_ms) || std::isinf(vel_ms)) {
+            r = g = b = 0;
+            return;
+        }
+
+        // Convert m/s → knots
+        float vel = vel_ms * 1.9426f;
+
+        if (vel <= 0)      { r = 20;  g = 5;   b = 72;  return; }
+        else if (vel <= 2) { r = 50;  g = 20;  b = 140; return; }
+        else if (vel <= 4) { r = 124; g = 38;  b = 190; return; }
+        else if (vel <= 7) { r = 218; g = 55;  b = 120; return; }
+        else if (vel <= 15){ r = 251; g = 126; b = 33;  return; }
+        else if (vel <= 18){ r = 255; g = 255; b = 0;   return; }
+        else if (vel <= 22){ r = 153; g = 255; b = 51;  return; }
+        else if (vel <= 30){ r = 0;   g = 153; b = 230; return; }
+        else if (vel <= 35){ r = 0;   g = 17;  b = 26;  return; }
+        else if (vel <= 40){ r = 255; g = 255; b = 255; return; }
+
+        // Fallback RF color
+        r = 117; g = 0; b = 117;
+    }
+
+
+
+    static ColorMapFunc get_colormap_for_moment(const char* moment) {
+        if (cStringsEqual(moment, "REF")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_reflectivity_lacrosse(value, r, g, b);
+            };
+        }
+        else if (cStringsEqual(moment, "VEL")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_velocity_evans(value, r, g, b);
+            };
+        }
+        else if (cStringsEqual(moment, "SW ")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_spectrum_width(value, r, g, b);
+            };
+        }
+        else if (cStringsEqual(moment, "ZDR")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_dbz(value, r, g, b);
+            };
+        }
+        else if (cStringsEqual(moment, "PHI")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_dbz(value, r, g, b);
+            };
+        }
+        else if (cStringsEqual(moment, "RHO")) {
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_correlation_coefficient(value, r, g, b);
+            };
+        }
+        else {
+            // Default fallback
+            return [](float value, uint8_t& r, uint8_t& g, uint8_t& b) {
+                colormap_dbz(value, r, g, b);
+            };
+        }
+    }
+private:
+    static constexpr float kt2ms = 0.51444f;
+};
+
 
 
 
@@ -508,70 +679,6 @@ std::vector<uint8_t> decompress_bzip2_stream(const uint8_t* input, size_t input_
 
     BZ2_bzDecompressEnd(&strm);
     return output;
-}
-
-
-//Find all bzip2 blocks by scanning for 'B' 'Z' 'h' signature
-std::vector<std::pair<size_t, size_t>> find_bzip2_blocks(const std::vector<uint8_t>& data) {
-    std::vector<size_t> starts;
-    size_t pos = 0;
-    const size_t data_size = data.size();
-
-    while (pos + 3 <= data_size) {
-        if (data[pos] == 'B' && data[pos + 1] == 'Z' && data[pos + 2] == 'h') {
-            starts.push_back(pos);
-            pos += 3;  // Skip ahead after finding signature
-        } else {
-            ++pos;
-        }
-    }
-
-    std::vector<std::pair<size_t, size_t>> blocks;
-    for (size_t i = 0; i < starts.size(); ++i) {
-        size_t block_start = starts[i];
-        size_t block_end = (i + 1 < starts.size()) ? starts[i + 1] : data_size;
-        size_t block_size = block_end - block_start;
-        blocks.emplace_back(block_start, block_size);
-    }
-    return blocks;
-}
-
-
-// --- Read compression record and decompress if needed ---
-std::vector<uint8_t> read_and_decompress(std::ifstream& file) {
-    // Compression record is 12 bytes after volume header
-    std::vector<uint8_t> comp_rec(COMPRESSION_RECORD_SIZE);
-    file.read(reinterpret_cast<char*>(comp_rec.data()), COMPRESSION_RECORD_SIZE);
-
-    // Check if BZ2 compressed
-    if (comp_rec[CONTROL_WORD_SIZE] == 'B' && comp_rec[CONTROL_WORD_SIZE+1] == 'Z') {
-        std::cout << "Detected BZip2 compression\n";
-        std::vector<uint8_t> decompressed;
-
-        // Read each block and decompress
-        std::vector<uint8_t> block(RECORD_SIZE);
-        while (file.read(reinterpret_cast<char*>(block.data()), RECORD_SIZE)) {
-            // The first 12 bytes in the block are a header (skip)
-            const uint8_t* compressed_data = block.data() + COMPRESSION_RECORD_SIZE;
-            size_t compressed_size = RECORD_SIZE - COMPRESSION_RECORD_SIZE;
-
-            std::vector<uint8_t> dec = decompress_bzip_block(compressed_data, compressed_size);
-            if (dec.empty()) {
-                std::cerr << "Decompression failed on a block\n";
-                break;
-            }
-            decompressed.insert(decompressed.end(), dec.begin(), dec.end());
-        }
-        return decompressed;
-
-    } else if ((comp_rec[CONTROL_WORD_SIZE] == 0x00 && comp_rec[CONTROL_WORD_SIZE+1] == 0x00) ||
-               (comp_rec[CONTROL_WORD_SIZE] == 0x09 && comp_rec[CONTROL_WORD_SIZE+1] == (char)0x80)) {
-        // Uncompressed data follows
-        std::cout << "Data is uncompressed\n";
-        return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), {});
-    }
-
-    throw std::runtime_error("Unknown compression format");
 }
 
 
@@ -696,33 +803,40 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
         msg31.block_pointer_9 = read_be32(p); p += 4;
         msg31.block_pointer_10 = read_be32(p); p += 4;
 
+        //store the in this array for easier searchiing for correct moment names
+        uint32_t block_pointers[10] = {
+            msg31.block_pointer_1,
+            msg31.block_pointer_2,
+            msg31.block_pointer_3,
+            msg31.block_pointer_4,
+            msg31.block_pointer_5,
+            msg31.block_pointer_6,
+            msg31.block_pointer_7,
+            msg31.block_pointer_8,
+            msg31.block_pointer_9,
+            msg31.block_pointer_10
+        };
+
+
 
         //short for refrence pointer
         const uint8_t* ref_ptr;// Start of the Message 31 (after ArchiveIIMessageHeader)
+        uint32_t block_ptr = 0;
+        for (int i = 0; i < 10; ++i) {
+            char data_name[4];   
+            uint32_t current_block_pointer = block_pointers[i];
 
+            std::memcpy(data_name, msg31_ptr + current_block_pointer+1, 3);
+            data_name[3] = '\0';
 
-        if (cStringsEqual(selected_radar_moment, "REF")) {
-            ref_ptr =  msg31_ptr + msg31.block_pointer_4; 
+            if(cStringsEqual(selected_radar_moment, data_name)){
+                block_ptr = current_block_pointer; 
+                break;  // stop after first match
+            }
         }
-        else if (cStringsEqual(selected_radar_moment, "VEL")) {
-            ref_ptr = msg31_ptr + msg31.block_pointer_5; 
-        }
-        else if (cStringsEqual(selected_radar_moment, "SW ")) {
-            ref_ptr =  msg31_ptr + msg31.block_pointer_6; 
-        }
-        else if (cStringsEqual(selected_radar_moment, "ZDR")) {
-            ref_ptr =  msg31_ptr + msg31.block_pointer_7; 
-        }
-        else if (cStringsEqual(selected_radar_moment, "PHI")) {
-            ref_ptr =  msg31_ptr + msg31.block_pointer_8; 
-        }
-        else if (cStringsEqual(selected_radar_moment, "RHO")) {
-            ref_ptr =  msg31_ptr + msg31.block_pointer_9; 
-        }
-        else {
-            std::cout << "this shouldnt run " << std::endl;
-            ref_ptr =  msg31_ptr + msg31.block_pointer_4; 
-        }
+ 
+        ref_ptr = msg31_ptr + block_ptr; 
+        
 
 
 
@@ -748,7 +862,11 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
 
         // std::cout << "moment name: " << moment_buf << std::endl;
         // std::cout << "selected radar moment: "<< selected_radar_moment <<std::endl;
-        if (!cStringsEqual(selected_radar_moment, moment_buf)){
+        
+        if (!cStringsEqual(selected_radar_moment, moment_buf)  || block_ptr == 0){
+            // std::cout << "moment name: " << moment_buf << std::endl;
+            // std::cout << "selected radar moment: "<< selected_radar_moment <<std::endl;
+        
             // some sort of error in parsing going on, just gonnna skip those data
             return hdr;
         }
@@ -770,11 +888,26 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
             SingleTilt tilt_0;
             tilt_0.ElevationAngle = msg31.elevation_angle;
 
+            std::cout <<"Elevation nalge; " << tilt_0.ElevationAngle << std::endl;
+
             VOL_EL_RAD vol_el_rad = parse_vol_el_rad_blocks(msg31_ptr + msg31.block_pointer_1,msg31_ptr + msg31.block_pointer_2,msg31_ptr + msg31.block_pointer_3 );
             tilt_0.vol_el_rad = vol_el_rad    ;
             tilt_0.gateSpacing = MOMENT.gate_spacing;
 
             alltilts.Tilts.push_back(tilt_0);
+
+                        std::cout << "available moments" ;
+                        for (int i = 0; i < 10; ++i) {
+                            char data_name[4];   
+                            uint32_t current_block_pointer = block_pointers[i];
+
+                            std::memcpy(data_name, msg31_ptr + current_block_pointer+1, 3);
+                            data_name[3] = '\0';
+
+                            std::cout <<data_name <<", ";
+                        }
+                        std::cout << " " << std::endl;
+
         } else {
             // Check if we are at the same tilt or a different tilt
             SingleTilt& last = alltilts.Tilts.back();
@@ -787,7 +920,21 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
                 tilt_next.vol_el_rad = vol_el_rad    ;
                 tilt_next.gateSpacing = MOMENT.gate_spacing;
 
+                std::cout <<"Elevation nalge; " << tilt_next.ElevationAngle << std::endl;
+
                 alltilts.Tilts.push_back(tilt_next);
+
+                        std::cout << "available moments" ;
+                        for (int i = 0; i < 10; ++i) {
+                            char data_name[4];   
+                            uint32_t current_block_pointer = block_pointers[i];
+
+                            std::memcpy(data_name, msg31_ptr + current_block_pointer+1, 3);
+                            data_name[3] = '\0';
+
+                            std::cout <<data_name <<", ";
+                        }
+                        std::cout << " " << std::endl;
             }else{
                 //update elevation angle to be avg instead:
                 last.count +=1;
@@ -828,7 +975,19 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
 
             RadialData point;
             point.azimuth_deg = msg31.azimuth_angle;
-            point.dist = distance_m;
+
+            float newDist = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle, msg31.azimuth_angle, distance_m);
+            
+            float minDist = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle+0.5f, msg31.azimuth_angle, distance_m);
+            float maxDist = get_arc_len_m_law_of_cosines(std::max(0.01f, current_tilt.ElevationAngle-0.5f), msg31.azimuth_angle, distance_m);
+
+            std::cout << newDist << ", " << minDist << " , " << maxDist << " .......  ";
+
+
+            //point.dist = distance_m;
+            point.dist = newDist;
+            point.dist_min = minDist;
+            point.dist_max = maxDist;
             point.value = moment_val;
 
             if (distance_m > current_tilt.maxDist) current_tilt.maxDist = distance_m;
@@ -840,8 +999,6 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
     return hdr;
 }
 
-
-// --- Example usage ---
 void process_ldm_block(const std::vector<uint8_t>& decompressed, AllTilt& alltilts) {
     size_t pos = 0;
     const size_t size = decompressed.size();
@@ -889,10 +1046,6 @@ void process_ldm_block(const std::vector<uint8_t>& decompressed, AllTilt& alltil
 }
 
 
-
-#include <iostream>
-#include <iomanip>  // for std::setprecision
-
 void printReflectivitySummary(const AllTilt& reflectivity_data) {
     std::cout << "=== Reflectivity Data Summary ===\n";
     std::cout << "Type: " << reflectivity_data.type << "\n";
@@ -922,326 +1075,6 @@ void printReflectivitySummary(const AllTilt& reflectivity_data) {
     std::cout << "=== End of Summary ===\n";
 }
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-
-void colormap_velocity(float vel, uint8_t& r, uint8_t& g, uint8_t& b, float VNYQ = 30.0f) {
-    if (std::isnan(vel) || std::isinf(vel)) {
-        r = g = b = 0;
-        return;
-    }
-
-    // Clamp velocity into [-VNYQ, VNYQ]
-    //should already be folded
-    //float v = std::max(-VNYQ, std::min(VNYQ, vel));
-    float v = vel;
-    VNYQ = VNYQ/100;
-
-    //std::cout << v << ", ";
-
-    // Normalize to [-1, 1]
-    float norm = v / VNYQ;
-
-    //std::cout << ": norm: "<< norm << ", ";
-
-    // Near zero → gray (shrink this threshold!)
-    if (std::fabs(norm) < 0.00000001f) { // ±1% of Nyquist
-        r = g = b = 128;
-        return;
-    }
-
-    if (norm < 0) {
-        // Toward radar (negative) → green
-        float t = (norm + 1.0f); // maps [-1,0] → [0,1]
-        r = static_cast<uint8_t>(30 * t);
-        g = static_cast<uint8_t>(180 + 75 * t);
-        b = static_cast<uint8_t>(30 * t);
-    } else {
-        // Away from radar (positive) → red
-        float t = (1.0f - norm); // maps [0,1] → [1,0]
-        r = static_cast<uint8_t>(180 + 75 * t);
-        g = static_cast<uint8_t>(30 * t);
-        b = static_cast<uint8_t>(30 * t);
-    }
-}
-
-
-
-constexpr float kt2ms = 0.51444f;
-
-void colormap_velocity_evans(float vel, uint8_t& r, uint8_t& g, uint8_t& b,  float VNYQ = 30.0f) {
-    //https://www.wxtools.org/velocity/awips-evans
-    if (std::isnan(vel) || std::isinf(vel)) {
-        r = g = b = 0;
-        return;
-    }
-
-    VNYQ = VNYQ/100;
-
-    // Convert from knots to m/s
-    vel *= 1.0f; // if vel already in m/s, leave as-is
-
-    if (vel <= -120*kt2ms)      { r = 255; g = 0;   b = 128; return; }
-    else if (vel <= -90.5*kt2ms){ r =  static_cast<uint8_t>(255 + (0-255)*(vel+120*kt2ms)/(29.5*kt2ms));
-                                   g = static_cast<uint8_t>(0 + (0-0)*(vel+120*kt2ms)/(29.5*kt2ms));
-                                   b = static_cast<uint8_t>(128 + (160-128)*(vel+120*kt2ms)/(29.5*kt2ms)); return; }
-    else if (vel <= -70*kt2ms)  { r = 0; g = static_cast<uint8_t>(0 + (224-0)*(vel+90.5*kt2ms)/(20.5*kt2ms)); b = static_cast<uint8_t>(160 + (255-160)*(vel+90.5*kt2ms)/(20.5*kt2ms)); return; }
-    else if (vel <= -69.99*kt2ms){ r = 0; g = 255; b = 224; return; }
-    else if (vel <= -60*kt2ms)   { r = 0; g = 255; b = 225; return; }
-    else if (vel <= -59.99*kt2ms){ r = 160; g = 255; b = 208; return; }
-    else if (vel <= -50*kt2ms)   { r = 160; g = 255; b = 208; return; }
-    else if (vel <= -49.99*kt2ms){ r = 160; g = 255; b = 208; return; }
-    else if (vel <= -40*kt2ms)   { r = 0; g = 255; b = 0; return; }
-    else if (vel <= -10*kt2ms)   { r = 16; g = 96; b = 16; return; }
-    else if (vel <= -0.01*kt2ms) { r = 112; g = 128; b = 112; return; }
-    else if (vel <= 0)            { r = 144; g = 128; b = 144; return; }
-    else if (vel <= 10*kt2ms)     { r = 112; g = 0; b = 0; return; }
-    else if (vel <= 40*kt2ms)     { r = 255; g = 0; b = 0; return; }
-    else if (vel <= 48.6*kt2ms)   { r = 255; g = 0; b = 128; return; }
-    else if (vel <= 49.5*kt2ms)   { r = 255; g = 0; b = 144; return; }
-    else if (vel <= 69.99*kt2ms)  { r = 255; g = 196; b = 255; return; }
-    else if (vel <= 70*kt2ms)     { r = 255; g = 96; b = 0; return; }
-    else if (vel <= 120*kt2ms)    { r = 255; g = 255; b = 0; return; }
-
-    // Fallback RF
-    r = 128; g = 0; b = 208;
-}
-
-void colormap_dbz(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
-    if (std::isnan(dbz) || std::isinf(dbz)) {
-        r = g = b = 0;
-        return;
-    }
-
-    struct ColorStep {
-        float threshold;
-        uint8_t r, g, b;
-    };
-
-    static const ColorStep scale[] = {
-        { 5.0f,   4, 233, 231 },  // light blue
-        { 10.0f,  1, 159, 244 },
-        { 15.0f,  3, 0, 244 },
-        { 20.0f,  2, 253, 2 },
-        { 25.0f,  1, 197, 1 },
-        { 30.0f,  0, 142, 0 },
-        { 35.0f,  253, 248, 2 },
-        { 40.0f,  229, 188, 0 },
-        { 45.0f,  253, 149, 0 },
-        { 50.0f,  253, 0, 0 },
-        { 55.0f,  212, 0, 0 },
-        { 60.0f,  188, 0, 0 },
-        { 65.0f,  248, 0, 253 }, // magenta
-        { 70.0f,  152, 84, 198 },
-        { INFINITY, 255, 255, 255 }  // fallback (white)
-    };
-
-    for (const auto& step : scale) {
-        if (dbz < step.threshold) {
-            r = step.r;
-            g = step.g;
-            b = step.b;
-            return;
-        }
-    }
-}
-
-void colormap_reflectivity_lacrosse(float dbz, uint8_t& r, uint8_t& g, uint8_t& b) {
-    //https://www.wxtools.org/reflectivity/2004-lacrosse-br
-    if (std::isnan(dbz) || std::isinf(dbz)) {
-        r = g = b = 0;
-        return;
-    }
-
-    if (dbz <= -30) { r = 0; g = 0; b = 0; return; }
-    else if (dbz <= 0)   { r = 105; g = 126; b = 108; return; }
-    else if (dbz <= 5)   { r = 94; g = 94; b = 94; return; }
-    else if (dbz <= 10)  { r = 131; g = 131; b = 131; return; }
-    else if (dbz <= 15)  { r = 171; g = 171; b = 171; return; }
-    else if (dbz <= 20)  { r = 0; g = 225; b = 255; return; }
-    else if (dbz <= 25)  { r = 0; g = 150; b = 255; return; }
-    else if (dbz <= 30)  { r = 0; g = 255; b = 0; return; }
-    else if (dbz <= 35)  { r = 0; g = 180; b = 0; return; }
-    else if (dbz <= 40)  { r = 255; g = 250; b = 0; return; }
-    else if (dbz <= 45)  { r = 255; g = 170; b = 0; return; }
-    else if (dbz <= 50)  { r = 255; g = 0; b = 0; return; }
-    else if (dbz <= 60)  { r = 254; g = 222; b = 255; return; }
-    else if (dbz <= 65)  { r = 255; g = 99; b = 255; return; }
-    else if (dbz <= 70)  { r = 173; g = 0; b = 176; return; }
-    else if (dbz <= 75)  { r = 255; g = 255; b = 255; return; }
-
-    // Anything above max
-    r = 255; g = 255; b = 255;
-}
-
-void colormap_correlation_coefficient(float rho, uint8_t& r, uint8_t& g, uint8_t& b) {
-    //https://www.wxtools.org/correlation-coefficient/awips-rho-cc
-    if (std::isnan(rho) || std::isinf(rho)) {
-        r = g = b = 0;
-        return;
-    }
-
-    if (rho >= 1.05f) { r = 164; g = 54;  b = 150; return; }
-    else if (rho >= 1.00f) { r = 255; g = 180; b = 215; return; }
-    else if (rho >= 0.99f) { r = 139; g = 30;  b = 77; return; }
-    else if (rho >= 0.97f) { r = 225; g = 3;   b = 0; return; }
-    else if (rho >= 0.95f) { r = 255; g = 140; b = 0; return; }
-    else if (rho >= 0.90f) { r = 255; g = 255; b = 0; return; }
-    else if (rho >= 0.85f) { r = 135; g = 215; b = 10; return; }
-    else if (rho >= 0.80f) { r = 95;  g = 245; b = 100; return; }
-    else if (rho >= 0.75f) { r = 120; g = 120; b = 255; return; }
-    else if (rho >= 0.60f) { r = 10;  g = 10;  b = 190; return; }
-    else if (rho >= 0.45f) { r = 15;  g = 15;  b = 140; return; }
-    else                   { r = 15;  g = 15;  b = 140; return; }
-}
-
-void colormap_spectrum_width(float vel_ms, uint8_t& r, uint8_t& g, uint8_t& b) {
-    //https://www.wxtools.org/spectrum-width/bens-sw
-    if (std::isnan(vel_ms) || std::isinf(vel_ms)) {
-        r = g = b = 0;
-        return;
-    }
-
-    // Convert m/s → knots
-    float vel = vel_ms * 1.9426f;
-
-    if (vel <= 0)      { r = 20;  g = 5;   b = 72;  return; }
-    else if (vel <= 2) { r = 50;  g = 20;  b = 140; return; }
-    else if (vel <= 4) { r = 124; g = 38;  b = 190; return; }
-    else if (vel <= 7) { r = 218; g = 55;  b = 120; return; }
-    else if (vel <= 15){ r = 251; g = 126; b = 33;  return; }
-    else if (vel <= 18){ r = 255; g = 255; b = 0;   return; }
-    else if (vel <= 22){ r = 153; g = 255; b = 51;  return; }
-    else if (vel <= 30){ r = 0;   g = 153; b = 230; return; }
-    else if (vel <= 35){ r = 0;   g = 17;  b = 26;  return; }
-    else if (vel <= 40){ r = 255; g = 255; b = 255; return; }
-
-    // Fallback RF color
-    r = 117; g = 0; b = 117;
-}
-
-void saveTiltAsPNGInterpolate(const SingleTilt& tilt, const std::string& filename, const int SIZE = 1000, float M_PER_PIXEL = 800.0f) {
-
-    const int CENTER = SIZE / 2;
-
-    int nyquist_vel = tilt.vol_el_rad.rad.nyquist_vel;
-    std::cout << "nyquist: " << nyquist_vel << std::endl;
-
-    // Define a struct to hold moment value, count, and distance
-    struct GridPoint {
-        float value = 0.0f;  // Sum of radar moment values
-        int count = 0;       // Number of contributing radials
-        float distance = 0.0f; // Distance from radar (radial.dist)
-    };
-
-    // Grid declaration
-    std::vector<std::vector<GridPoint>> grid(SIZE, std::vector<GridPoint>(SIZE, {0.0f, 0, 0.0f}));
-    std::vector<std::vector<float>> interpolated(SIZE, std::vector<float>(SIZE, std::numeric_limits<float>::quiet_NaN()));
-
-    // Step 1: Populate known grid values
-    for (const auto& radial : tilt.Radials) {
-        //if (std::isnan(radial.value) || radial.value < -30 || radial.value > 80) continue;
-
-        float az_rad = radial.azimuth_deg * M_PI / 180.0f;
-        float x = radial.dist * std::sin(az_rad);
-        float y = radial.dist * std::cos(az_rad);
-
-        int px = static_cast<int>(x / M_PER_PIXEL + CENTER);
-        int py = static_cast<int>(CENTER - y / M_PER_PIXEL);
-
-        if (px >= 0 && px < SIZE && py >= 0 && py < SIZE) {
-            grid[py][px].value += radial.value;
-            grid[py][px].count++;
-            grid[py][px].distance = radial.dist; // Store the distance (last radial wins)
-            // Alternatively, average distances: grid[py][px].distance += radial.dist;
-        } else {
-            //std::cout << "Clipped: dist = " << radial.dist << ", az = " << radial.azimuth_deg << ", px = " << px << ", py = " << py << std::endl;
-        }
-    }
-    // Step 2: Assign known averages
-    for (int y = 0; y < SIZE; ++y) {
-        for (int x = 0; x < SIZE; ++x) {
-            if (grid[y][x].count > 0 && grid[y][x].distance > 1000 ) {
-                interpolated[y][x] = grid[y][x].value / grid[y][x].count;
-            }
-        }
-    }
-
-    // Step 3: Interpolate enclosed NaNs
-    for (int step = 0; step < 4; ++step) {
-        std::vector<std::vector<float>> snapshot = interpolated;
-
-        for (int y = 2; y < SIZE - 2; ++y) {
-            for (int x = 2; x < SIZE - 2; ++x) {
-                if (!std::isnan(interpolated[y][x])) continue;
-
-                float sum = 0.0f;
-                int count = 0;
-
-                for (int dy = -1; dy <= 1; ++dy) {
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        if (dx == 0 && dy == 0) continue;
-                        float neighbor = snapshot[y + dy][x + dx];
-                        if (!std::isnan(neighbor)) {
-                            sum += neighbor;
-                            count++;
-                        }
-                    }
-                }
-
-                if (count >= 5) { // allow some flexibility
-                    if (grid[y][x].distance < 1000) continue;
-                    interpolated[y][x] = sum / count;
-                }
-            }
-        }
-    }
-
-    // Step 4: Render RGBA image
-    std::vector<uint8_t> image(SIZE * SIZE * 4, 0);
-
-    for (int y = 0; y < SIZE; y++) {
-        for (int x = 0; x < SIZE; x++) {
-            float value = interpolated[y][x];
-            int idx = (y * SIZE + x) * 4;
-
-            if (!std::isnan(value) && value != 0.0f && (value >= 0.01 || value <= 0.01) ) {
-                uint8_t r, g, b;
-
-                colormap_dbz(value, r, g, b);
-                // Or: colormap_velocity(value, r, g, b, float(nyquist_vel));
-
-                image[idx + 0] = r;
-                image[idx + 1] = g;
-                image[idx + 2] = b;
-                image[idx + 3] = 255; // opaque
-            } else {
-                // Transparent pixel
-                image[idx + 0] = 0;
-                image[idx + 1] = 0;
-                image[idx + 2] = 0;
-                image[idx + 3] = 0; // fully transparent
-            }
-        }
-    }
-
-    // Step 5: Save as PNG with alpha
-    png_buffer.clear();
-    stbi_write_png_to_func(
-        [](void* context, void* data, int size) {
-            auto* out = static_cast<std::vector<uint8_t>*>(context);
-            out->insert(out->end(), (uint8_t*)data, (uint8_t*)data + size);
-        },
-        &png_buffer,
-        SIZE, SIZE, 4,         // 4 = RGBA
-        image.data(), SIZE * 4 // row stride
-    );
-
-    std::cout << "Saved RGBA image with transparency to buffer." << std::endl;
-}
-
-
 
 void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filename, const int SIZE = 1000, float M_PER_PIXEL = 800.0f) {
 
@@ -1254,7 +1087,7 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
     const float beam_half_width_rad = 0.5f * M_PI / 180.0f; // 0.5 degree, not 0.5 radians
 
     int nyquist_vel = tilt.vol_el_rad.rad.nyquist_vel;
-    std::cout << "nyquist: " << nyquist_vel << std::endl;
+    // std::cout << "nyquist: " << nyquist_vel << std::endl;
 
     struct GridPoint {
         float value = 0.0f;
@@ -1290,21 +1123,23 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
         float cos_az_rad = std::cos(az_rad);
         float sin_az_rad = std::sin(az_rad);
 
-        float inner_r = std::max(0.0f, radial.dist - half_gate);
-        float outer_r = radial.dist + half_gate;
+        float inner_r = std::max(0.0f, radial.dist_min - half_gate);
+        float outer_r = radial.dist_max + half_gate;
+
+        //std::cout << radial.dist_min << ", " <<radial.dist_max << " .  ";
 
         // bounding box corners (in meters from origin)
-        float x_plusrad_plusdist = (radial.dist+ half_gate) * std::cos(az_rad + beam_half_width_rad)  + center_x;
-        float x_plusrad_minusdist = (radial.dist- half_gate) * std::cos(az_rad + beam_half_width_rad)+ center_x;
+        float x_plusrad_plusdist = (radial.dist_max+ half_gate) * std::cos(az_rad + beam_half_width_rad)  + center_x;
+        float x_plusrad_minusdist = (radial.dist_min- half_gate) * std::cos(az_rad + beam_half_width_rad)+ center_x;
         
-        float x_minusrad_plusdist = (radial.dist+ half_gate)  * std::cos(az_rad - beam_half_width_rad)+ center_x;
-        float x_minusrad_minusdist = (radial.dist-  half_gate)  * std::cos(az_rad - beam_half_width_rad)+ center_x;
+        float x_minusrad_plusdist = (radial.dist_max+ half_gate)  * std::cos(az_rad - beam_half_width_rad)+ center_x;
+        float x_minusrad_minusdist = (radial.dist_min-  half_gate)  * std::cos(az_rad - beam_half_width_rad)+ center_x;
 
-        float y_plusrad_plusdist = (radial.dist+ half_gate) *std::sin(az_rad + beam_half_width_rad)+ center_y;
-        float y_plusrad_minusdist = (radial.dist- half_gate) *std::sin(az_rad + beam_half_width_rad)+ center_y;
+        float y_plusrad_plusdist = (radial.dist_max+ half_gate) *std::sin(az_rad + beam_half_width_rad)+ center_y;
+        float y_plusrad_minusdist = (radial.dist_min- half_gate) *std::sin(az_rad + beam_half_width_rad)+ center_y;
 
-        float y_minusrad_plusdist = (radial.dist+ half_gate) * std::sin(az_rad - beam_half_width_rad)+ center_y;
-        float y_minusrad_minusdist = (radial.dist- half_gate) * std::sin(az_rad - beam_half_width_rad)+ center_y;
+        float y_minusrad_plusdist = (radial.dist_max+ half_gate) * std::sin(az_rad - beam_half_width_rad)+ center_y;
+        float y_minusrad_minusdist = (radial.dist_min- half_gate) * std::sin(az_rad - beam_half_width_rad)+ center_y;
 
         float min_x = std::min({x_plusrad_minusdist, x_plusrad_plusdist, x_minusrad_minusdist, x_minusrad_plusdist});
         float max_x = std::max({x_plusrad_minusdist, x_plusrad_plusdist, x_minusrad_minusdist, x_minusrad_plusdist});
@@ -1329,11 +1164,6 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
     std::vector<GridPoint> grid(SIZE * SIZE);
     std::vector<float> interpolated(SIZE * SIZE, std::numeric_limits<float>::quiet_NaN());
 
-    std::vector<float> xm_for_px(SIZE);
-    std::vector<float> ym_for_py(SIZE);
-    for (int px = 0; px < SIZE; ++px) xm_for_px[px] = (px - CENTER) * M_PER_PIXEL;
-    for (int py = 0; py < SIZE; ++py) ym_for_py[py] = (CENTER - py) * M_PER_PIXEL;
-
     const float beam_half_angle = 0.5f * M_PI / 180.0f;
     const float cos_tol = std::cos(beam_half_angle);
     const float cos_tol_sq = cos_tol * cos_tol;
@@ -1348,11 +1178,11 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
 
 
         for (int py = py_min; py <= py_max; ++py) {
-            const float ym = ym_for_py[py];
+            const float ym = (CENTER - py) * M_PER_PIXEL;
             const float ym_sq = ym * ym;
             for (int px = px_min; px <= px_max; ++px) {
 
-                const float xm = xm_for_px[px];
+                const float xm = (px - CENTER) * M_PER_PIXEL;
                 const float r2 = xm * xm + ym_sq;
 
                 if (r2 < rad.inner_r_sq || r2 > rad.outer_r_sq) continue;
@@ -1381,6 +1211,9 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
         }
     }
 
+    ColorMapper::ColorMapFunc colormap = ColorMapper::get_colormap_for_moment(selected_radar_moment);
+
+
     std::vector<uint8_t> image(SIZE * SIZE * 4, 0);
     for (int y = 0; y < SIZE; ++y) {
         for (int x = 0; x < SIZE; ++x) {
@@ -1390,31 +1223,8 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
 
             if (!std::isnan(value) && std::fabs(value) >= 0.01f) {
                 uint8_t r, g, b;
-
-                if (cStringsEqual(selected_radar_moment, "REF")) {
-                    colormap_reflectivity_lacrosse(value, r, g, b);
-                }
-                else if (cStringsEqual(selected_radar_moment, "VEL")) {
-                    //std::cout << "nyquist velocity : "<< nyquist_vel << std::endl;
-                    colormap_velocity_evans(value, r, g, b, float(nyquist_vel));
-                }
-                else if (cStringsEqual(selected_radar_moment, "SW ")) {
-                    colormap_spectrum_width(value, r, g, b); 
-                }
-                else if (cStringsEqual(selected_radar_moment, "ZDR")) {
-                    colormap_dbz(value, r, g, b);
-                }
-                else if (cStringsEqual(selected_radar_moment, "PHI")) {
-                    colormap_dbz(value, r, g, b);
-                }
-                else if (cStringsEqual(selected_radar_moment, "RHO")) {
-                    colormap_correlation_coefficient(value, r, g, b);
-                }
-                else {
-                    colormap_dbz(value, r, g, b);
-                }
-
-                //colormap_dbz(value, r, g, b);
+                colormap(value, r, g, b);
+                
                 image[out_i + 0] = r;
                 image[out_i + 1] = g;
                 image[out_i + 2] = b;
@@ -1427,7 +1237,6 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
             }
         }
     }
-
     png_buffer.clear();
     stbi_write_png_to_func(
         [](void* context, void* data, int size) {
@@ -1442,7 +1251,7 @@ void saveTiltAsPNGInterpolate2(const SingleTilt& tilt, const std::string& filena
     std::cout << "Saved RGBA image with transparency to buffer." << std::endl;
 }
 
-std::pair<float, float> project_from_bearing(
+std::pair<float, float> project_from_bearing_haversine(
     float latitude, float longitude, float arc_len_m, float bearing_deg)
 {
     const float earth_radius_m = 6371000.0;
@@ -1463,6 +1272,23 @@ std::pair<float, float> project_from_bearing(
     return std::make_pair(rad2deg(latitude2_rad), rad2deg(longitude2_rad));
 }
 
+float get_arc_len_m_law_of_cosines(float elevation_angle, 
+                                    float bearing_angle, float r){
+
+    float earth_radius_m = 6371000;                     
+    float center_to_beam = std::sqrt(
+        r* r +
+        earth_radius_m * earth_radius_m -
+        2 * earth_radius_m * r * std::cos(deg2rad(90 + elevation_angle)));
+
+    float arc_angle = std::acos(
+        (r *r- earth_radius_m * earth_radius_m - center_to_beam * center_to_beam) /
+        (-2 * earth_radius_m * center_to_beam));
+
+    float arc_len_m = arc_angle * earth_radius_m;
+
+    return arc_len_m    ;
+}
 
 std::pair<std::pair<float, float>, std::pair<float, float>>
 get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation_angle,
@@ -1508,7 +1334,7 @@ get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation
 
     std::vector<std::pair<float, float>> projected_points;
     for (float bearing : bearings) {
-        projected_points.push_back(project_from_bearing(latitude, longitude, arc_len_m, bearing));
+        projected_points.push_back(project_from_bearing_haversine(latitude, longitude, arc_len_m, bearing));
     }
 
     if (use_midpoints) {
@@ -1587,6 +1413,7 @@ extern "C" {
         //uint8_t* data_ptr = buffer.data();
         std::vector<uint8_t> buffer(data, data + length);
 
+        //REading Volume header data
         uint8_t* data_ptr = data;
         VolumeHeader vol_header;
         std::memcpy(vol_header.tape, data_ptr, 9); data_ptr += 9;
@@ -1604,12 +1431,11 @@ extern "C" {
 
         //std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)), {});
 
-
+        // For holding decompressed data
         std::vector<uint8_t> full_decompressed_data;
 
+        //Initialize Struct to hold moment data for all tilts, not just reflectivity
         AllTilt reflectivity_data;
-
-        //std::vector<size_t> bz2_offsets,  = find_bzip2_block_offsets(buffer);  // already implemented
 
         auto [bz2_offsets, bz2_block_sizes] = find_bzip2_block_offsets(buffer); 
 

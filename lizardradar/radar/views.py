@@ -26,6 +26,7 @@ import s3fs
 def get_latest_nexrad_file(station):
     fs = s3fs.S3FileSystem(anon=True, use_listings_cache=False)
     bucket = 'noaa-nexrad-level2'
+    bucket = 'unidata-nexrad-level2'
     timestamp_pattern = re.compile(rf"{station}(\d{{8}})_(\d{{6}})_V06$")  # Match _V06 files only
 
     for offset in range(2):
@@ -61,8 +62,10 @@ from django.http import JsonResponse
 def latest_radar_scan(request, station):
     try:
         url = get_latest_nexrad_file(station)
-        # print("url: ", url[1])
-        url = 'https://noaa-nexrad-level2.s3.amazonaws.com' + url[1][18:]
+        # # print("url: ", url[1])
+        # url = 'https://noaa-nexrad-level2.s3.amazonaws.com' + url[1][18:]
+        print("url: ", url[1])
+        url = 'https://unidata-nexrad-level2.s3.amazonaws.com' + url[1][21:]
         # print("url: ", url)
         return JsonResponse({"url": url})
     except Exception as e:

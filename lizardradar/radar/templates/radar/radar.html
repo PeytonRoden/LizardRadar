@@ -339,7 +339,7 @@
       }
       
       const radarImage = L.imageOverlay(url_image, bounds, {
-          opacity: 0.5,
+          opacity: 0.8,
           interactive: false,
           noWrap: true,
           pane: 'overlayPane',
@@ -537,22 +537,26 @@
 
 
 
-      // Initialize the map with EPSG:4326 CRS
-      const map = L.map('map', {
-          crs: L.CRS.EPSG4326,
-          center: [35.3, -80.3],
-          zoom: 2
-      });
-
-
-      L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
-        //layers: 'TOPO-OSM-WMS',
-        layers: 'OSM-Overlay-WMS',
-        format: 'image/png',
-        transparent: false,
+    // Initialize the map with EPSG:4326 CRS
+    const map = L.map('map', {
         crs: L.CRS.EPSG4326,
-        attribution: 'TOPO‑OSM‑WMS by terrestris'
-      }).addTo(map);
+        center: [35.3, -80.3],
+        zoom: 2
+    });
+
+
+    var wmsLayer = L.tileLayer.wms('https://ows.terrestris.de/osm/service?', {
+      layers: 'OSM-Overlay-WMS',
+      format: 'image/png',
+      transparent: false,
+      crs: L.CRS.EPSG4326,
+      attribution: 'TOPO-OSM-WMS by terrestris'
+    }).addTo(map);
+
+    // After adding to map, tweak its display:
+    wmsLayer.getContainer().style.filter = "brightness(0.95) invert(1)";
+
+        
 
 
     fetch("{% static 'radar/nexrad_sites.json' %}")
