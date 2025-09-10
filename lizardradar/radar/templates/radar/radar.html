@@ -11,6 +11,11 @@
   <script src="https://unpkg.com/proj4@2.8.0/dist/proj4.js"></script>
   <script src="https://unpkg.com/proj4leaflet@1.0.2/src/proj4leaflet.js"></script>
 
+
+  <!-- Distortable Image Overlay plugin -->
+  <script src=" https://cdn.jsdelivr.net/npm/leaflet-distortableimage@0.21.9/dist/leaflet.distortableimage.min.js "></script>
+  <link href=" https://cdn.jsdelivr.net/npm/leaflet-distortableimage@0.21.9/dist/leaflet.distortableimage.min.css " rel="stylesheet">
+
   <script>
 
     var current_icao = null;
@@ -218,8 +223,8 @@
   <button id="parseBtn">Parse NEXRAD (check console)</button>
 
   <!-- Load Leaflet -->
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-    
+  <!-- <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+     -->
 
   <!-- Load and use WASM -->
   <script type="module">
@@ -322,12 +327,27 @@
       const lat2 = instance._get_latitude_bottomright();
       const lon2 = instance._get_longitude_bottomright();
 
+      const lat3 = instance._get_latitude_bottomleft();
+      const lon3 = instance._get_longitude_bottomleft();
+      const lat4 = instance._get_latitude_topright();
+      const lon4 = instance._get_longitude_topright();
+
       console.log("lat1: " , lat1);
       console.log("lon1: " , lon1);
       console.log("lat2: " , lat2);
       console.log("lon2 " , lon2);
+      console.log("lat3: " , lat3);
+      console.log("lon3: " , lon3);
+      console.log("lat4: " , lat4);
+      console.log("lon4 " , lon4);
 
       const bounds = [[lat2, lon1], [lat1, lon2]]; // SW and NE corners
+      const bounds_4 = [
+          L.latLng(lat1, lon1), // NW (top-left)
+          L.latLng(lat4, lon4), // NE (top-right)
+          L.latLng(lat3, lon3), // SW (bottom-left)
+          L.latLng(lat2, lon2)  // SE (bottom-right)
+        ];
 
       const bytes = new Uint8Array(instance.HEAPU8.buffer, ptr_image, size);
       const blob = new Blob([bytes], { type: "image/png" });
@@ -338,14 +358,33 @@
         map.removeLayer(window.currentRadarOverlay);
       }
       
-      const radarImage = L.imageOverlay(url_image, bounds, {
-          opacity: 0.8,
-          interactive: false,
-          noWrap: true,
-          pane: 'overlayPane',
-          preferCanvas: true,
-          className: 'radar-overlay-crisp'  // Add custom class
-      });
+      // const radarImage = L.imageOverlay(url_image, bounds, {
+      //     opacity: 0.8,
+      //     interactive: false,
+      //     noWrap: true,
+      //     pane: 'overlayPane',
+      //     preferCanvas: true,
+      //     className: 'radar-overlay-crisp'  // Add custom class
+      // });
+
+
+      // const radarImage3 = L.distortableImageOverlay(
+      //   'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png',
+      //   { corners: bounds_4 }
+      // ).addTo(map);
+
+      // console.log("bounds_4: ", bounds_4);
+      // L.polygon(bounds_4, {color: 'blue'}).addTo(map);
+      // map.fitBounds(bounds_4);
+
+
+      radarImage = L.distortableImageOverlay(
+        url_image,
+        {
+          corners: bounds_4,
+        }
+      )
+            
 
 // Add CSS to disable image smoothing
 

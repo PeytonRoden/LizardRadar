@@ -42,9 +42,13 @@ bool cStringsEqual(const char* str1, const char* str2) {
 std::vector<uint8_t> png_buffer;
 float latitude_topleft;
 float longitude_topleft;
-
 float latitude_bottomright;
 float longitude_bottomright;
+
+float latitude_topright;
+float longitude_topright;
+float latitude_bottomleft;
+float longitude_bottomleft;
 
 
 // --- Structs based on Py-ART format descriptions ---
@@ -208,13 +212,24 @@ struct AllTilt {
 #pragma pack(pop)
 
 // declare function
-float get_arc_len_m_law_of_cosines(float elevation_angle, 
-                                    float bearing_angle, float r);
+double get_arc_len_m_law_of_cosines(double elevation_angle, 
+                                    double bearing_angle, double r);
 
 // Function pointer type for colormaps
 typedef void (*ColorMapFunc)(float value, uint8_t& r, uint8_t& g, uint8_t& b);
 
 constexpr double PI = 3.14159265358979323846;
+
+constexpr double DEG2RAD = PI / 180.0;
+constexpr double RAD2DEG = 180.0 / PI;
+
+// Spherical Earth radius (meters) for AEQD forward/inverse
+constexpr double R_SPHERE = 6371000.0;
+
+// deg <-> rad
+inline double d2r(double d){ return d * DEG2RAD; }
+inline double r2d(double r){ return r * RAD2DEG; }
+
 
 inline double deg2rad(double degrees) {
     return degrees * (PI / 180.0);
@@ -920,7 +935,7 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
                 tilt_next.vol_el_rad = vol_el_rad    ;
                 tilt_next.gateSpacing = MOMENT.gate_spacing;
 
-                std::cout <<"Elevation nalge; " << tilt_next.ElevationAngle << std::endl;
+                std::cout <<"Elevation angle is; " << tilt_next.ElevationAngle << std::endl;
 
                 alltilts.Tilts.push_back(tilt_next);
 
@@ -976,13 +991,17 @@ ArchiveIIMessageHeader parse_archive_ii_header(const uint8_t* p, bool first_mess
             RadialData point;
             point.azimuth_deg = msg31.azimuth_angle;
 
-            float newDist = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle, msg31.azimuth_angle, distance_m);
+            float d1 = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle, msg31.azimuth_angle, distance_m);
             
-            float minDist = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle+0.5f, msg31.azimuth_angle, distance_m);
-            float maxDist = get_arc_len_m_law_of_cosines(std::max(0.01f, current_tilt.ElevationAngle-0.5f), msg31.azimuth_angle, distance_m);
+            float d2 = get_arc_len_m_law_of_cosines(current_tilt.ElevationAngle+0.5f, msg31.azimuth_angle, distance_m);
+            float d3  = get_arc_len_m_law_of_cosines(std::max(0.01f, current_tilt.ElevationAngle-0.5f), msg31.azimuth_angle, distance_m);
 
-            std::cout << newDist << ", " << minDist << " , " << maxDist << " .......  ";
+            // Find min and max
+            float minDist = std::min({d1, d2, d3});
+            float maxDist = std::max({d1, d2, d3});
 
+            // Compute newDist as the average of min and max
+            float newDist = 0.5f * (minDist + maxDist);
 
             //point.dist = distance_m;
             point.dist = newDist;
@@ -1272,33 +1291,328 @@ std::pair<float, float> project_from_bearing_haversine(
     return std::make_pair(rad2deg(latitude2_rad), rad2deg(longitude2_rad));
 }
 
-float get_arc_len_m_law_of_cosines(float elevation_angle, 
-                                    float bearing_angle, float r){
+double get_arc_len_m_law_of_cosines(double elevation_angle, 
+                                    double bearing_angle, double r){
 
-    float earth_radius_m = 6371000;                     
-    float center_to_beam = std::sqrt(
+    double earth_radius_m = 6371000;                     
+    double center_to_beam = std::sqrt(
         r* r +
         earth_radius_m * earth_radius_m -
         2 * earth_radius_m * r * std::cos(deg2rad(90 + elevation_angle)));
 
-    float arc_angle = std::acos(
+    double arc_angle = std::acos(
         (r *r- earth_radius_m * earth_radius_m - center_to_beam * center_to_beam) /
         (-2 * earth_radius_m * center_to_beam));
 
-    float arc_len_m = arc_angle * earth_radius_m;
+    double arc_len_m = arc_angle * earth_radius_m;
 
     return arc_len_m    ;
 }
+
+
+// Forward AEQD (lat,lon in degrees) -> x,y (meters) -- spherical
+// Center is lat0, lon0 (degrees)
+void aeqd_forward(double lat_deg, double lon_deg, double lat0_deg, double lon0_deg, double &x, double &y, double R = R_SPHERE) {
+    double phi = d2r(lat_deg);
+    double lambda = d2r(lon_deg);
+    double phi0 = d2r(lat0_deg);
+    double lambda0 = d2r(lon0_deg);
+
+    double dlam = lambda - lambda0;
+    // normalize dlam to [-pi,pi]
+    if (dlam > PI) dlam -= 2*PI;
+    if (dlam < -PI) dlam += 2*PI;
+
+    double cosphi = cos(phi);
+    double sinphi = sin(phi);
+    double cosphi0 = cos(phi0);
+    double sinphi0 = sin(phi0);
+
+    double cosc = sinphi0 * sinphi + cosphi0 * cosphi * cos(dlam);
+    // clamp cosc into [-1,1]
+    if (cosc > 1.0) cosc = 1.0;
+    if (cosc < -1.0) cosc = -1.0;
+    double c = acos(cosc);
+
+    double k;
+    if (fabs(c) < 1e-12) k = 1.0;
+    else k = c / sin(c);
+
+    x = R * k * cosphi * sin(dlam);
+    y = R * k * (cosphi0 * sinphi - sinphi0 * cosphi * cos(dlam));
+}
+
+// Inverse AEQD (x,y in meters) -> lat,lon degrees (spherical)
+void aeqd_inverse(double x, double y, double lat0_deg, double lon0_deg, double &lat_deg, double &lon_deg, double R = R_SPHERE) {
+    double phi0 = d2r(lat0_deg);
+    double lambda0 = d2r(lon0_deg);
+
+    double rho = sqrt(x*x + y*y);
+    double c = rho / R;
+    double sinc = sin(c);
+    double cosc = cos(c);
+
+    double lat_rad;
+    if (rho == 0.0) {
+        lat_rad = phi0;
+    } else {
+        lat_rad = asin(cosc * sin(phi0) + (y * sinc * cos(phi0) / rho));
+    }
+
+    double denom = rho * cos(phi0) * cosc - y * sin(phi0) * sinc;
+    double lon_rad = lambda0 + atan2(x * sinc, denom);
+
+    lat_deg = r2d(lat_rad);
+    lon_deg = r2d(lon_rad);
+
+    // Normalize lon to [-180,180]
+    if (lon_deg > 180.0) lon_deg -= 360.0;
+    if (lon_deg < -180.0) lon_deg += 360.0;
+}
+
+// Bilinear sampling from a square matrix (row-major, rows top->bottom).
+// N: width==height
+float bilinear_sample(const std::vector<float>& mat, int N, double r, double c) {
+    // r: row, c: col (floating). Rows increase downward (0..N-1)
+    if (r < 0 || r > N-1 || c < 0 || c > N-1) return NAN;
+
+    int r0 = (int)floor(r);
+    int c0 = (int)floor(c);
+    int r1 = r0 + 1;
+    int c1 = c0 + 1;
+
+    double fr = r - r0;
+    double fc = c - c0;
+
+    auto at = [&](int rr, int cc)->double {
+        if (rr < 0) rr = 0;
+        if (cc < 0) cc = 0;
+        if (rr >= N) rr = N-1;
+        if (cc >= N) cc = N-1;
+        return mat[rr * N + cc];
+    };
+
+    double v00 = at(r0, c0);
+    double v10 = at(r1, c0);
+    double v01 = at(r0, c1);
+    double v11 = at(r1, c1);
+
+    double v0 = v00 * (1-fr) + v10 * fr;
+    double v1 = v01 * (1-fr) + v11 * fr;
+    double v = v0 * (1-fc) + v1 * fc;
+    return (float)v;
+}
+
+void saveTiltAsPNG_EPSG4326(const SingleTilt& tilt, const std::string& filename,
+                             const int SIZE = 1000, float M_PER_PIXEL = 800.0f,
+                             int out_w = 1600, int out_h = 900,
+                             double center_lat = 0.0, double center_lon = -100.0) {
+
+    const int CENTER = SIZE / 2;
+
+    // --- Precompute radial cache from tilt data ---
+    struct GridPoint {
+        float value = 0.0f;
+        int   count = 0;
+        float distance_sq = 0.0f;
+    };
+
+    struct RadialCache {
+        float sin_az;
+        float cos_az;
+        float inner_r;
+        float outer_r;
+        float value;
+        float inner_r_sq;
+        float outer_r_sq;
+        float min_x;
+        float max_x;
+        float min_y;
+        float max_y;
+    };
+    std::vector<RadialCache> radial_cache;
+    radial_cache.reserve(tilt.Radials.size());
+
+    float half_gate = tilt.gateSpacing * 0.5f;
+    const float beam_half_width_rad = 0.5f * M_PI / 180.0f;
+
+    for (const auto& radial : tilt.Radials) {
+        if (std::isnan(radial.value)) continue;
+
+        float az_rad = (90.0f - radial.azimuth_deg) * M_PI / 180.0f;
+        float cos_az = std::cos(az_rad);
+        float sin_az = std::sin(az_rad);
+
+        float inner_r = std::max(0.0f, radial.dist_min - half_gate);
+        float outer_r = radial.dist_max + half_gate;
+
+        // bounding box corners in meters from radar center
+        float x_plusrad_plusdist = (radial.dist_max+ half_gate) * std::cos(az_rad + beam_half_width_rad);
+        float x_plusrad_minusdist = (radial.dist_min- half_gate) * std::cos(az_rad + beam_half_width_rad);
+        float x_minusrad_plusdist = (radial.dist_max+ half_gate) * std::cos(az_rad - beam_half_width_rad);
+        float x_minusrad_minusdist = (radial.dist_min- half_gate) * std::cos(az_rad - beam_half_width_rad);
+
+        float y_plusrad_plusdist = (radial.dist_max+ half_gate) * std::sin(az_rad + beam_half_width_rad);
+        float y_plusrad_minusdist = (radial.dist_min- half_gate) * std::sin(az_rad + beam_half_width_rad);
+        float y_minusrad_plusdist = (radial.dist_max+ half_gate) * std::sin(az_rad - beam_half_width_rad);
+        float y_minusrad_minusdist = (radial.dist_min- half_gate) * std::sin(az_rad - beam_half_width_rad);
+
+        float min_x = std::min({x_plusrad_minusdist, x_plusrad_plusdist, x_minusrad_minusdist, x_minusrad_plusdist});
+        float max_x = std::max({x_plusrad_minusdist, x_plusrad_plusdist, x_minusrad_minusdist, x_minusrad_plusdist});
+        float min_y = std::min({y_plusrad_minusdist, y_plusrad_plusdist, y_minusrad_minusdist, y_minusrad_plusdist});
+        float max_y = std::max({y_plusrad_minusdist, y_plusrad_plusdist, y_minusrad_minusdist, y_minusrad_plusdist});
+
+        radial_cache.push_back({sin_az, cos_az, inner_r, outer_r, radial.value,
+                                inner_r*inner_r, outer_r*outer_r,
+                                min_x, max_x, min_y, max_y});
+    }
+
+    // --- Create AEQD interpolation grid ---
+    std::vector<GridPoint> grid(SIZE*SIZE);
+    const float cos_tol_sq = std::cos(0.5f * M_PI/180.0f);
+    const float min_r2_eps = 1e-6f;
+
+    for (const auto& rad : radial_cache) {
+        int px_min = std::max(0, int(std::floor(rad.min_x / M_PER_PIXEL + CENTER)));
+        int px_max = std::min(SIZE-1, int(std::floor(rad.max_x / M_PER_PIXEL + CENTER)));
+        int py_min = std::max(0, int(std::floor(-rad.max_y / M_PER_PIXEL + CENTER)));
+        int py_max = std::min(SIZE-1, int(std::floor(-rad.min_y / M_PER_PIXEL + CENTER)));
+
+        for (int py=py_min; py<=py_max; ++py) {
+            float ym = (CENTER - py) * M_PER_PIXEL;
+            float ym_sq = ym*ym;
+            for (int px=px_min; px<=px_max; ++px) {
+                float xm = (px - CENTER) * M_PER_PIXEL;
+                float r2 = xm*xm + ym_sq;
+                if (r2 < rad.inner_r_sq || r2 > rad.outer_r_sq || r2 <= min_r2_eps) continue;
+                float dot = xm*rad.cos_az + ym*rad.sin_az;
+                if (dot*dot < cos_tol_sq * r2) continue;
+                GridPoint &g = grid[py*SIZE + px];
+                g.value += rad.value;
+                g.count += 1;
+                g.distance_sq = r2;
+            }
+        }
+    }
+
+    // --- Normalize / average values ---
+    std::vector<float> interp(SIZE*SIZE, std::numeric_limits<float>::quiet_NaN());
+    for (int i=0;i<SIZE*SIZE;++i) {
+        if (grid[i].count>0) interp[i] = grid[i].value / grid[i].count;
+    }
+
+    // --- Compute AEQD bounds (meters) ---
+    float half_extent = SIZE*M_PER_PIXEL/2.0f;
+    std::vector<std::pair<double,double>> aeqd_corners = {
+        {-half_extent,-half_extent},
+        { half_extent,-half_extent},
+        { half_extent, half_extent},
+        {-half_extent, half_extent}
+    };
+
+
+
+    double lat_min =  90.0, lat_max = -90.0;
+    double lon_min = 180.0, lon_max = -180.0;
+    for (auto &c : aeqd_corners) {
+        double lat, lon;
+        aeqd_inverse(c.first, c.second, center_lat, center_lon, lat, lon);
+        lat_min = std::min(lat_min, lat);
+        lat_max = std::max(lat_max, lat);
+        lon_min = std::min(lon_min, lon);
+        lon_max = std::max(lon_max, lon);
+    }
+    struct GeoCorner {
+        double lat;
+        double lon;
+    };
+
+    std::vector<GeoCorner> geo_corners;
+    for (auto &c : aeqd_corners) {
+        double lat, lon;
+        aeqd_inverse(c.first, c.second, center_lat, center_lon, lat, lon);
+        geo_corners.push_back({lat, lon});
+    }
+    latitude_topleft     = geo_corners[0].lat;
+    longitude_topleft    = geo_corners[0].lon;
+
+    latitude_topright    = geo_corners[1].lat;
+    longitude_topright   = geo_corners[1].lon;
+
+    latitude_bottomright = geo_corners[2].lat;
+    longitude_bottomright= geo_corners[2].lon;
+
+    latitude_bottomleft  = geo_corners[3].lat;
+    longitude_bottomleft = geo_corners[3].lon;
+
+
+
+    // --- Create EPSG:4326 output raster ---
+    std::vector<uint8_t> out_image(out_w*out_h*4, 0);
+
+    float vmin = 1e30f, vmax=-1e30f;
+    for (auto v : interp) if (std::isfinite(v)) { vmin = std::min(vmin,v); vmax = std::max(vmax,v); }
+    if (vmax-vmin < 1e-12f) vmax = vmin+1.0f;
+
+    //out_h and out_w must be same  as SIZE
+    for (int j=0;j<out_h;++j) {
+        double t = (out_h==1)?0.5:(double)j/(out_h-1);
+        double lat = lat_max + (lat_min-lat_max)*t;
+        for (int i=0;i<out_w;++i) {
+            double s = (out_w==1)?0.5:(double)i/(out_w-1);
+            double lon = lon_min + (lon_max-lon_min)*s;
+
+            double x,y;
+            aeqd_forward(lat, lon, center_lat, center_lon, x, y);
+
+            double px = x / M_PER_PIXEL + CENTER;
+            double py = -y / M_PER_PIXEL + CENTER;
+
+            int idx = j*out_w + i;
+            float val = bilinear_sample(interp, SIZE, py, px);
+
+            int out_idx = idx*4;
+            if (std::isfinite(val)) {
+                double norm = (val-vmin)/(vmax-vmin);
+                norm = std::max(0.0, std::min(1.0, norm));
+                uint8_t u = (uint8_t)lround(norm*255.0);
+                out_image[out_idx+0] = u;
+                out_image[out_idx+1] = u;
+                out_image[out_idx+2] = u;
+                out_image[out_idx+3] = 255;
+            } else {
+                out_image[out_idx+0] = 0;
+                out_image[out_idx+1] = 0;
+                out_image[out_idx+2] = 0;
+                out_image[out_idx+3] = 0;
+            }
+        }
+    }
+
+    // --- Save PNG (RGBA) ---
+    stbi_write_png_to_func(
+        [](void* context, void* data, int size) {
+            auto* out = static_cast<std::vector<uint8_t>*>(context);
+            out->insert(out->end(), (uint8_t*)data, (uint8_t*)data + size);
+        },
+        &png_buffer,
+        SIZE, SIZE, 4,
+        out_image.data(), SIZE * 4
+    );
+    //stbi_write_png(filename.c_str(), out_w, out_h, 4, out_image.data(), out_w*4);
+    std::cout << "Saved EPSG:4326 PNG: " << filename << " (" << out_w << "x" << out_h << ")\n";
+}
+
 
 std::pair<std::pair<float, float>, std::pair<float, float>>
 get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation_angle,
                                  float m_per_pixel, float png_size, float max_dist,
                                  bool use_midpoints = false)
 {
-    float beam_len = use_midpoints ? max_dist
+    double beam_len = use_midpoints ? max_dist
                                           : std::sqrt(2 * std::pow((png_size * m_per_pixel) / 2, 2));
     
-    float earth_radius_m = 6371000;
+    double earth_radius_m = 6371000;
 
     std::cout << "earth radius M: " << earth_radius_m << std:: endl;
 
@@ -1314,7 +1628,7 @@ get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation
 
     AtmosphericRayTracer tracer;
 
-    float arc_angle = tracer.get_earth_arc_angle_station_to_beam_end(
+    double arc_angle = tracer.get_earth_arc_angle_station_to_beam_end(
         0.0,
         tracer.earth_radius,
         deg2rad(elevation_angle),
@@ -1326,7 +1640,7 @@ get_latlon_corners_or_midpoints(float latitude, float longitude, float elevation
 
     std::cout << "arc angle: "<< arc_angle <<std::endl;
 
-    float arc_len_m = arc_angle * earth_radius_m;
+    double arc_len_m = arc_angle * earth_radius_m;
 
     // For corners or side midpoints
     std::vector<float> bearings = use_midpoints ? std::vector<float>{0, 90, 180, 270}
@@ -1368,6 +1682,15 @@ extern "C" {
     float get_latitude_bottomright() {return latitude_bottomright;}
     EMSCRIPTEN_KEEPALIVE
     float get_longitude_bottomright() {return longitude_bottomright;}
+    
+    EMSCRIPTEN_KEEPALIVE
+    float get_latitude_bottomleft() {return latitude_bottomleft;}
+    EMSCRIPTEN_KEEPALIVE
+    float get_longitude_bottomleft() {return longitude_bottomleft;}
+    EMSCRIPTEN_KEEPALIVE
+    float get_latitude_topright() {return latitude_topright;}
+    EMSCRIPTEN_KEEPALIVE
+    float get_longitude_topright() {return longitude_topright;}
 
     EMSCRIPTEN_KEEPALIVE
     float* get_tilt_angles(){
@@ -1497,6 +1820,11 @@ extern "C" {
         std::cout << "new m per pixel: " << M_PER_PIXEL << std::endl;
         
         saveTiltAsPNGInterpolate2(reflectivity_data.Tilts[tilt_number_for_data ], "tilt1_reflectivity.png", SIZE, M_PER_PIXEL);
+        
+        saveTiltAsPNG_EPSG4326(reflectivity_data.Tilts[tilt_number_for_data ], "tilt1_reflectivity.png",
+             SIZE, M_PER_PIXEL, SIZE, SIZE, reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lat 
+             ,reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lon
+            );
 
 
         std::cout << "latidude: " <<reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lat << std::endl;
@@ -1510,10 +1838,10 @@ extern "C" {
 
         //lat_long_pairs = get_latitude_longitude_from_midpoints(reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lat, reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lon, reflectivity_data.Tilts[tilt_number_for_data ].ElevationAngle, M_PER_PIXEL, SIZE, max_dist);
         lat_long_pairs = get_latlon_corners_or_midpoints(reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lat, reflectivity_data.Tilts[tilt_number_for_data ].vol_el_rad.vol.lon, reflectivity_data.Tilts[tilt_number_for_data ].ElevationAngle, M_PER_PIXEL, SIZE, max_dist, true);
-        latitude_topleft = lat_long_pairs.first.first;
-        longitude_topleft = lat_long_pairs.first.second;
-        latitude_bottomright = lat_long_pairs.second.first;
-        longitude_bottomright = lat_long_pairs.second.second;
+        // latitude_topleft = lat_long_pairs.first.first;
+        // longitude_topleft = lat_long_pairs.first.second;
+        // latitude_bottomright = lat_long_pairs.second.first;
+        // longitude_bottomright = lat_long_pairs.second.second;
 
 
         return 0;
